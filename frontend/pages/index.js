@@ -1,0 +1,291 @@
+import React, { useState, useEffect, useContext } from 'react';
+import Link from 'next/link';
+import Head from 'next/head';
+import Image from 'next/image';
+import { AuthContext } from '../context/AuthContext';
+
+const Home = () => {
+  const { user } = useContext(AuthContext);
+  const [featuredCoins, setFeaturedCoins] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchRandomCoins = async () => {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+        const res = await fetch(`${apiUrl}/api/coins/random?limit=4`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        setFeaturedCoins(data.results || []);
+      } catch {
+        setFeaturedCoins([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchRandomCoins();
+  }, []);
+
+  return (
+    <div className="bg-canvas">
+      <Head>
+        <title>NumisRoma — 40,000+ Roman Imperial Coins Cataloged</title>
+        <meta
+          name="description"
+          content="Browse over 40,000 documented Roman Imperial coins. Search by emperor, dynasty, mint, and more. Build your collection and connect with serious collectors — free."
+        />
+        <link rel="icon" href="/favicon.ico" />
+        <meta httpEquiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+        <meta httpEquiv="Pragma" content="no-cache" />
+        <meta httpEquiv="Expires" content="0" />
+      </Head>
+
+      <main>
+        {/* ── Hero ──────────────────────────────────────────────────── */}
+        <section className="bg-surface border-b border-border">
+          <div className="max-w-7xl mx-auto px-6 py-24 lg:py-32">
+            <div className="grid lg:grid-cols-2 gap-16 items-center">
+
+              {/* Left: editorial heading */}
+              <div className="animate-fade-up">
+                <p className="font-sans text-xs font-medium tracking-widest uppercase mb-6 text-amber">
+                  Roman Imperial Coinage
+                </p>
+                <h1
+                  className="font-display font-semibold leading-none mb-8 text-text-primary"
+                  style={{ fontSize: 'clamp(48px, 6vw, 80px)' }}
+                >
+                  Every Emperor.
+                  <br />
+                  Every Coin.
+                  <br />
+                  <span className="text-amber">One Catalog.</span>
+                </h1>
+                <p className="font-sans text-lg mb-10 max-w-md text-text-secondary" style={{ lineHeight: '1.7' }}>
+                  Browse over 40,000 documented Roman Imperial coins. Search by emperor, dynasty, mint, and material. Build your collection. Connect with serious collectors.
+                </p>
+
+                <div className="flex flex-wrap gap-3">
+                  <Link
+                    href={user ? '/new-collection' : '/register'}
+                    className="font-sans font-semibold px-6 py-3 text-sm rounded bg-amber text-[#fdf8f0] hover:bg-amber-hover transition-colors duration-200"
+                  >
+                    {user ? 'Create a Collection' : 'Start for free'}
+                  </Link>
+                  <Link
+                    href="/browse"
+                    className="font-sans font-medium px-6 py-3 text-sm rounded border border-border-strong text-text-secondary hover:border-amber hover:text-text-primary transition-colors duration-200"
+                  >
+                    Browse the catalog →
+                  </Link>
+                </div>
+
+                {/* Social proof */}
+                <div className="flex items-center gap-8 mt-12 pt-8 border-t border-border">
+                  {[
+                    { value: '40,000+', label: 'coins documented' },
+                    { value: '27 BC',   label: 'to 476 AD covered' },
+                    { value: 'Free',    label: 'forever' },
+                  ].map(({ value, label }) => (
+                    <div key={label}>
+                      <p className="font-display font-semibold text-2xl text-text-primary">{value}</p>
+                      <p className="font-sans text-xs mt-0.5 text-text-muted">{label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Right: coin grid preview */}
+              <div className="hidden lg:grid grid-cols-2 gap-3">
+                {loading
+                  ? Array.from({ length: 4 }).map((_, i) => (
+                      <div key={i} className="aspect-square rounded-md animate-pulse bg-surface-alt" />
+                    ))
+                  : featuredCoins.slice(0, 4).map((coin) => (
+                      <Link
+                        key={coin._id}
+                        href={`/coin-detail?id=${coin._id}`}
+                        className="group relative aspect-square rounded-md overflow-hidden bg-surface border border-border"
+                      >
+                        <Image
+                          src={coin.obverse?.image || '/images/coin-placeholder.jpg'}
+                          alt={coin.name}
+                          fill
+                          className="object-contain p-5 mix-blend-multiply group-hover:scale-105 transition-transform duration-300"
+                        />
+                        <div className="absolute inset-x-0 bottom-0 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                          style={{ background: 'linear-gradient(to top, rgba(46,40,32,0.85), transparent)' }}
+                        >
+                          <p className="font-sans text-xs font-medium truncate text-[#fdf8f0]">{coin.authority?.emperor}</p>
+                          <p className="font-sans text-xs truncate text-[#e8d8b0]">{coin.description?.date_range}</p>
+                        </div>
+                      </Link>
+                    ))
+                }
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Catalog preview ───────────────────────────────────────── */}
+        <section className="py-20 bg-card border-b border-border">
+          <div className="max-w-7xl mx-auto px-6">
+            <div className="flex items-end justify-between mb-10">
+              <div>
+                <p className="font-sans text-xs font-medium tracking-widest uppercase mb-3 text-amber">
+                  From the catalog
+                </p>
+                <h2 className="font-display font-semibold text-4xl text-text-primary">
+                  A glimpse inside
+                </h2>
+              </div>
+              <Link
+                href="/browse"
+                className="font-sans text-sm font-medium text-amber hover:text-amber-hover transition-colors duration-200 hidden sm:block"
+              >
+                View all 40,000+ coins →
+              </Link>
+            </div>
+
+            {loading ? (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="rounded-md animate-pulse bg-surface-alt" style={{ aspectRatio: '3/4' }} />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {featuredCoins.map((coin) => (
+                  <Link
+                    key={coin._id}
+                    href={`/coin-detail?id=${coin._id}`}
+                    className="group rounded-md overflow-hidden border border-border bg-card hover:shadow-md transition-shadow duration-200"
+                  >
+                    <div className="aspect-square relative bg-surface">
+                      <Image
+                        src={coin.obverse?.image || '/images/coin-placeholder.jpg'}
+                        alt={coin.name}
+                        fill
+                        className="object-contain p-5 mix-blend-multiply"
+                      />
+                    </div>
+                    <div className="p-4 border-t border-border">
+                      <p className="font-sans text-xs font-medium uppercase tracking-wide mb-1 text-text-muted">
+                        {coin.authority?.emperor}
+                      </p>
+                      <h3 className="font-display font-semibold text-base leading-tight mb-1 line-clamp-2 text-text-primary">
+                        {coin.name}
+                      </h3>
+                      <p className="font-sans text-xs text-text-muted">
+                        {coin.description?.date_range}
+                      </p>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+
+            <div className="text-center mt-8 sm:hidden">
+              <Link href="/browse" className="font-sans text-sm font-medium text-amber">
+                View all 40,000+ coins →
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Coins image section ───────────────────────────────────── */}
+        <section className="relative overflow-hidden" style={{ height: 480 }}>
+          <div
+            className="absolute inset-0 z-10"
+            style={{ background: 'linear-gradient(to right, rgba(253,248,240,0.88) 38%, rgba(253,248,240,0.4) 65%, transparent)' }}
+          />
+          <Image
+            src="/images/coins-bg.jpg"
+            alt="Ancient Roman coins"
+            fill
+            className="object-cover"
+            style={{ objectPosition: 'center 20%' }}
+          />
+          <div className="absolute inset-0 flex items-center z-20">
+            <div className="max-w-7xl mx-auto px-6">
+              <p className="font-sans text-xs font-medium tracking-widest uppercase mb-4 text-amber">
+                27 BC — 476 AD
+              </p>
+              <h2
+                className="font-display font-semibold mb-4 max-w-xl text-text-primary"
+                style={{ fontSize: 'clamp(28px, 3.5vw, 48px)', lineHeight: '1.15' }}
+              >
+                From Augustus to the fall of Rome
+              </h2>
+              <p className="font-sans text-base max-w-sm text-text-secondary" style={{ lineHeight: '1.7' }}>
+                Every dynasty. Every mint. Every deity. All documented.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* ── Features ──────────────────────────────────────────────── */}
+        <section className="py-20 bg-canvas border-t border-border">
+          <div className="max-w-7xl mx-auto px-6">
+            <div className="grid md:grid-cols-3 gap-8">
+              {[
+                {
+                  n: '01',
+                  title: 'Find any coin in seconds',
+                  body: 'Search across all 40,000+ coins by emperor, dynasty, mint, material, or date range. Combine filters to narrow across the full arc of Imperial Rome.',
+                },
+                {
+                  n: '02',
+                  title: "Know what you're holding",
+                  body: 'Every coin includes obverse and reverse descriptions, historical context, rarity notes, mint details, and die information — everything a serious collector needs.',
+                },
+                {
+                  n: '03',
+                  title: 'Your collection. Your way.',
+                  body: 'Build private or public collections, follow other collectors, and share the pieces that matter to you. Free, forever.',
+                },
+              ].map(({ n, title, body }) => (
+                <div key={n} className="flex flex-col gap-4">
+                  <span className="font-mono text-sm font-medium text-amber">{n}</span>
+                  <div className="w-8 h-px bg-amber opacity-40" />
+                  <h3 className="font-display font-semibold text-2xl text-text-primary">{title}</h3>
+                  <p className="font-sans text-sm leading-relaxed text-text-secondary">{body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── CTA band (logged-out only) ────────────────────────────── */}
+        {!user && (
+          <section className="py-20 bg-surface-alt border-t-2 border-amber">
+            <div className="max-w-7xl mx-auto px-6 text-center">
+              <p className="font-sans text-xs font-medium tracking-widest uppercase mb-4 text-amber">
+                Join NumisRoma
+              </p>
+              <h2
+                className="font-display font-semibold mb-4 text-text-primary"
+                style={{ fontSize: 'clamp(28px, 4vw, 44px)' }}
+              >
+                The largest Roman coin archive online.
+              </h2>
+              <p className="font-sans text-lg mb-10 mx-auto max-w-md text-text-secondary">
+                Free to use. No credit card. No ads.
+              </p>
+              <Link
+                href="/register"
+                className="font-sans font-semibold px-8 py-3.5 text-sm rounded inline-block bg-amber text-[#fdf8f0] hover:bg-amber-hover transition-colors duration-200"
+              >
+                Create your free account
+              </Link>
+            </div>
+          </section>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default Home;

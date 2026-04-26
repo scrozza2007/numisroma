@@ -1,0 +1,57 @@
+{
+  "name": "numisroma",
+  "version": "1.0.0",
+  "description": "NumisRoma - Ancient Roman Coin Collection Platform",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "docker compose up",
+    "build": "docker compose build",
+    "start": "docker compose up -d",
+    "stop": "docker compose down",
+    "test:backend": "npm -w backend test",
+    "test:frontend": "npm -w frontend run cypress:open",
+    "lint:frontend": "npm -w frontend run lint",
+    "build:frontend": "npm -w frontend run build",
+    "install:all": "npm install",
+    "prepare": "husky"
+  },
+  "keywords": [
+    "numismatics",
+    "ancient-coins",
+    "roman-coins",
+    "collection-management",
+    "nextjs",
+    "express",
+    "mongodb"
+  ],
+  "author": "NumisRoma Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scrozza2007/numisroma.git"
+  },
+  "bugs": {
+    "url": "https://github.com/scrozza2007/numisroma/issues"
+  },
+  "homepage": "https://github.com/scrozza2007/numisroma#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0"
+  },
+  "lint-staged": {
+    "backend/src/**/*.js": [
+      "node --check"
+    ],
+    "frontend/**/*.{js,jsx}": [
+      "node --check"
+    ]
+  }
+}

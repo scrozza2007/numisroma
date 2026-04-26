@@ -1,0 +1,88 @@
+{
+  "name": "@numisroma/backend",
+  "version": "1.0.0",
+  "description": "Backend API for NumisRoma - Ancient Roman Coin Collection Platform",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "keywords": [
+    "numismatics",
+    "coins",
+    "roman",
+    "collection",
+    "api",
+    "express",
+    "mongodb"
+  ],
+  "author": "NumisRoma Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scrozza2007/numisroma.git",
+    "directory": "backend"
+  },
+  "bugs": {
+    "url": "https://github.com/scrozza2007/numisroma/issues"
+  },
+  "homepage": "https://github.com/scrozza2007/numisroma#readme",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1036.0",
+    "@sentry/node": "^10.50.0",
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "csrf-csrf": "^4.0.3",
+    "dompurify": "^3.4.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "express-validator": "^7.3.0",
+    "helmet": "^8.1.0",
+    "jsdom": "^29.0.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.19.2",
+    "multer": "^2.0.2",
+    "prom-client": "^15.1.3",
+    "rate-limit-redis": "^4.3.1",
+    "redis": "^5.9.0",
+    "sharp": "^0.34.4",
+    "winston": "^3.18.3",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "jest": "^30.2.0",
+    "mongodb-memory-server": "^10.3.0",
+    "nodemon": "^3.1.10",
+    "supertest": "^7.1.4"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "coverageProvider": "v8",
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ],
+    "testMatch": [
+      "<rootDir>/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/index.js",
+      "!src/config/**/*.js"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "statements": 54,
+        "branches": 52,
+        "functions": 45,
+        "lines": 54
+      }
+    }
+  }
+}
