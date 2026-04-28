@@ -75,9 +75,27 @@ const Settings = () => {
           </div>
         )}
 
+        {/* Mobile tab strip — scrollable pills, hidden on desktop */}
+        <div className="flex md:hidden overflow-x-auto gap-2 pb-1 mb-6 -mx-1 px-1">
+          {TABS.map(({ id, label, icon }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full font-sans text-sm font-medium whitespace-nowrap shrink-0 transition-colors duration-150 border ${
+                activeTab === id
+                  ? 'bg-amber-bg border-amber text-amber'
+                  : 'bg-card border-border text-text-secondary hover:border-border-strong'
+              }`}
+            >
+              <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">{icon}</svg>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          {/* Sidebar */}
-          <div className="md:col-span-1">
+          {/* Sidebar — desktop only */}
+          <div className="hidden md:block md:col-span-1">
             <nav className="p-2 bg-card border border-border rounded-lg">
               {TABS.map(({ id, label, icon }) => (
                 <button
@@ -97,7 +115,7 @@ const Settings = () => {
           </div>
 
           {/* Panel */}
-          <div className="md:col-span-3 p-6 bg-card border border-border rounded-lg">
+          <div className="md:col-span-3 p-5 sm:p-6 bg-card border border-border rounded-lg">
             {activeTab === 'account'       && <AccountPanel onSuccess={showSuccessMessage} />}
             {activeTab === 'notifications' && <NotificationsPanel onSuccess={showSuccessMessage} />}
             {activeTab === 'privacy'       && <PrivacyPanel onSuccess={showSuccessMessage} />}

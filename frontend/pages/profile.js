@@ -238,7 +238,7 @@ const ProfilePage = () => {
       {/* Banner */}
       <div className="w-full h-48 md:h-64 bg-surface-alt" />
 
-      <div className="max-w-5xl mx-auto px-4 relative">
+      <div className="max-w-5xl mx-auto px-3 sm:px-4 relative">
         <ProfileHeader
           profile={profile}
           collectionsCount={collections.length}

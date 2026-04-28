@@ -132,7 +132,7 @@ const CoinDetail = () => {
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto py-10 px-6">
+      <div className="max-w-7xl mx-auto py-8 sm:py-10 px-4 sm:px-6">
         {loading ? (
           <div className="flex justify-center items-center h-64">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-amber border-t-transparent" />

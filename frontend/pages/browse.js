@@ -14,6 +14,7 @@ const Browse = () => {
   const [error, setError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState({
     keyword: '', material: '', emperor: '', dynasty: '',
     denomination: '', mint: '', date_range: '', portrait: '', deity: '',
@@ -158,13 +159,13 @@ const Browse = () => {
         <meta name="description" content="Browse the comprehensive catalog of Roman Imperial coins" />
       </Head>
 
-      <div className="max-w-7xl mx-auto py-12 px-6">
+      <div className="max-w-7xl mx-auto py-8 sm:py-12 px-4 sm:px-6">
         {/* Page header */}
         <div className="mb-10">
           <p className="font-sans text-xs font-medium tracking-widest uppercase mb-3 text-amber">
             The Catalog
           </p>
-          <h1 className="font-display font-semibold text-4xl mb-2 text-text-primary">
+          <h1 className="font-display font-semibold text-3xl sm:text-4xl mb-2 text-text-primary">
             Roman Imperial Coins
           </h1>
           <p className="font-sans text-sm text-text-muted">
@@ -175,7 +176,27 @@ const Browse = () => {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
           {/* Sidebar filters */}
           <div className="lg:col-span-1">
-            <div className="p-6 bg-card border border-border rounded-md">
+            {/* Mobile toggle — hidden on desktop */}
+            <button
+              onClick={() => setFiltersOpen(v => !v)}
+              className="lg:hidden w-full flex items-center justify-between px-4 py-3 mb-3 font-sans text-sm font-semibold bg-card border border-border rounded-md text-text-secondary hover:border-amber transition-colors duration-150"
+            >
+              <span className="flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                {filtersOpen ? 'Hide Filters' : 'Show Filters'}
+              </span>
+              <svg
+                className={`w-4 h-4 transition-transform duration-200 ${filtersOpen ? 'rotate-180' : ''}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            <div className={`bg-card border border-border rounded-md overflow-hidden lg:block ${filtersOpen ? 'block' : 'hidden'}`}>
+            <div className="p-6">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="font-display font-semibold text-xl text-text-primary">Filters</h2>
                 <button
@@ -271,6 +292,7 @@ const Browse = () => {
                 </button>
               </form>
             </div>
+            </div>
           </div>
 
           {/* Results */}
@@ -293,7 +315,7 @@ const Browse = () => {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                   {coins.map((coin) => (
                     <Link
                       key={coin._id}

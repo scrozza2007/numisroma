@@ -156,6 +156,9 @@ const Messages = () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
+  /* On mobile, track whether the chat panel is shown */
+  const [mobileChatOpen, setMobileChatOpen] = useState(false);
+
   const getOtherUser = (conversation) => conversation.participants.find(p => p._id !== user._id);
 
   const formatTime = (dateString) => new Date(dateString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
@@ -204,8 +207,8 @@ const Messages = () => {
 
       <div className="h-full w-full bg-canvas">
         <div className="flex h-full w-full">
-          {/* Conversations Sidebar */}
-          <div className="w-72 flex flex-col shrink-0 bg-card border-r border-border">
+          {/* Conversations Sidebar — full width on mobile, fixed width on desktop */}
+          <div className={`flex flex-col shrink-0 bg-card border-r border-border w-full md:w-72 ${mobileChatOpen ? 'hidden md:flex' : 'flex'}`}>
             {/* Header */}
             <div className="p-4 border-b border-border">
               <div className="flex items-center justify-between">
@@ -278,6 +281,7 @@ const Messages = () => {
                         setSelectedConversation(conversation);
                         setLastMessageId(null);
                         fetchMessages(conversation._id);
+                        setMobileChatOpen(true);
                       }}
                       className={`flex items-center gap-3 p-3.5 cursor-pointer transition-colors duration-100 border-b border-border ${isSelected ? 'bg-amber-bg border-l-[3px] border-l-amber' : 'hover:bg-surface-alt border-l-[3px] border-l-transparent'}`}
                     >
@@ -310,12 +314,22 @@ const Messages = () => {
             </div>
           </div>
 
-          {/* Chat Area */}
-          <div className="flex-1 flex flex-col bg-canvas">
+          {/* Chat Area — hidden on mobile when no chat selected */}
+          <div className={`flex-1 flex-col bg-canvas ${mobileChatOpen ? 'flex' : 'hidden md:flex'}`}>
             {selectedConversation ? (
               <>
                 {/* Chat Header */}
                 <div className="flex items-center gap-3 p-4 border-b border-border bg-card">
+                  {/* Back button — mobile only */}
+                  <button
+                    onClick={() => setMobileChatOpen(false)}
+                    className="md:hidden flex items-center justify-center w-8 h-8 rounded text-text-muted hover:text-text-primary transition-colors duration-150 shrink-0"
+                    aria-label="Back to conversations"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
                   <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-amber-bg">
                     {getOtherUser(selectedConversation)?.avatar ? (
                       <Image
@@ -345,7 +359,7 @@ const Messages = () => {
                     const isOwn = message.sender._id === user._id;
                     return (
                       <div key={message._id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-md ${isOwn ? 'bg-text-primary text-canvas' : 'bg-card border border-border text-text-primary'}`}>
+                        <div className={`max-w-[75%] sm:max-w-xs lg:max-w-md px-4 py-2 rounded-md ${isOwn ? 'bg-text-primary text-canvas' : 'bg-card border border-border text-text-primary'}`}>
                           <p className="font-sans text-sm">{message.content}</p>
                           <p className={`font-sans text-xs mt-1 ${isOwn ? 'text-[rgba(253,248,240,0.6)]' : 'text-text-muted'}`}>
                             {formatTime(message.createdAt)}

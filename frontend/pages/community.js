@@ -142,7 +142,7 @@ const Community = () => {
         </div>
       )}
 
-      <div className="max-w-2xl mx-auto px-6 py-12">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
         <div className="mb-8">
           <p className="font-sans text-xs font-medium tracking-widest uppercase mb-3 text-amber">Community</p>
           <h1 className="font-display font-semibold text-4xl mb-2 text-text-primary">Collectors</h1>

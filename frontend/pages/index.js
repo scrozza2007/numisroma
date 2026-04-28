@@ -45,7 +45,7 @@ const Home = () => {
       <main>
         {/* ── Hero ──────────────────────────────────────────────────── */}
         <section className="bg-surface border-b border-border">
-          <div className="max-w-7xl mx-auto px-6 py-24 lg:py-32">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-14 sm:py-20 lg:py-32">
             <div className="grid lg:grid-cols-2 gap-16 items-center">
 
               {/* Left: editorial heading */}
@@ -83,7 +83,7 @@ const Home = () => {
                 </div>
 
                 {/* Social proof */}
-                <div className="flex items-center gap-8 mt-12 pt-8 border-t border-border">
+                <div className="flex flex-wrap items-center gap-6 sm:gap-8 mt-12 pt-8 border-t border-border">
                   {[
                     { value: '40,000+', label: 'coins documented' },
                     { value: '27 BC',   label: 'to 476 AD covered' },
@@ -130,8 +130,8 @@ const Home = () => {
         </section>
 
         {/* ── Catalog preview ───────────────────────────────────────── */}
-        <section className="py-20 bg-card border-b border-border">
-          <div className="max-w-7xl mx-auto px-6">
+        <section className="py-12 sm:py-20 bg-card border-b border-border">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6">
             <div className="flex items-end justify-between mb-10">
               <div>
                 <p className="font-sans text-xs font-medium tracking-widest uppercase mb-3 text-amber">
@@ -196,7 +196,7 @@ const Home = () => {
         </section>
 
         {/* ── Coins image section ───────────────────────────────────── */}
-        <section className="relative overflow-hidden" style={{ height: 480 }}>
+        <section className="relative overflow-hidden h-[300px] sm:h-[380px] md:h-[480px]">
           <div
             className="absolute inset-0 z-10"
             style={{ background: 'linear-gradient(to right, rgba(253,248,240,0.88) 38%, rgba(253,248,240,0.4) 65%, transparent)' }}
@@ -206,10 +206,14 @@ const Home = () => {
             alt="Ancient Roman coins"
             fill
             className="object-cover"
-            style={{ objectPosition: 'center 20%' }}
+            style={{
+              objectPosition: 'center center',
+              transform: 'scale(1.2)',
+              transformOrigin: 'center center',
+            }}
           />
           <div className="absolute inset-0 flex items-center z-20">
-            <div className="max-w-7xl mx-auto px-6">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6">
               <p className="font-sans text-xs font-medium tracking-widest uppercase mb-4 text-amber">
                 27 BC — 476 AD
               </p>
@@ -227,8 +231,8 @@ const Home = () => {
         </section>
 
         {/* ── Features ──────────────────────────────────────────────── */}
-        <section className="py-20 bg-canvas border-t border-border">
-          <div className="max-w-7xl mx-auto px-6">
+        <section className="py-12 sm:py-20 bg-canvas border-t border-border">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6">
             <div className="grid md:grid-cols-3 gap-8">
               {[
                 {
@@ -260,8 +264,8 @@ const Home = () => {
 
         {/* ── CTA band (logged-out only) ────────────────────────────── */}
         {!user && (
-          <section className="py-20 bg-surface-alt border-t-2 border-amber">
-            <div className="max-w-7xl mx-auto px-6 text-center">
+          <section className="py-12 sm:py-20 bg-surface-alt border-t-2 border-amber">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 text-center">
               <p className="font-sans text-xs font-medium tracking-widest uppercase mb-4 text-amber">
                 Join NumisRoma
               </p>
