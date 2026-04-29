@@ -1,4 +1,5 @@
-import { createContext, useState, useEffect } from 'react';
+import { createContext, useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/router';
 import { getCsrfHeader, invalidateCsrfToken } from '../utils/csrf';
 
 export const AuthContext = createContext();
@@ -29,6 +30,7 @@ const authFetch = async (url, options = {}, retry = false) => {
 };
 
 export const AuthProvider = ({ children }) => {
+  const router = useRouter();
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -96,20 +98,10 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        // Restore cached display data for fast first render, then verify via cookie.
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          try {
-            const parsed = JSON.parse(storedUser);
-            const sanitized = sanitizeUserData(parsed);
-            if (sanitized) setUser(sanitized);
-            else localStorage.removeItem('user');
-          } catch {
-            localStorage.removeItem('user');
-          }
-        }
-
-        // The httpOnly auth cookie is the source of truth. Verify it now.
+        // The httpOnly auth cookie is the source of truth — verify it first.
+        // We intentionally do NOT pre-populate user from localStorage here because
+        // that caused the profile icon to flash when the cookie was invalid/expired.
+        // localStorage is only used as a cache AFTER the cookie is confirmed valid.
         await fetchUserData();
       } catch (error) {
         console.error('Initialization error:', error);
@@ -123,7 +115,7 @@ export const AuthProvider = ({ children }) => {
     initializeAuth();
   }, []);
 
-  const fetchUserData = async () => {
+  const fetchUserData = useCallback(async () => {
     try {
       const response = await authFetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/auth/me`,
@@ -145,17 +137,30 @@ export const AuthProvider = ({ children }) => {
           setUser(null);
         }
       } else {
-        if (response.status === 401) {
-          localStorage.removeItem('user');
-          setToken(null);
-          setUser(null);
-        }
+        // Any non-OK response means we can't confirm the session — clear auth state.
+        // Invalidate the CSRF token too so the next login fetches a fresh one.
+        localStorage.removeItem('user');
+        invalidateCsrfToken();
+        setToken(null);
+        setUser(null);
       }
     } catch (error) {
-      // Don't clear data on network errors
+      // Network errors don't mean the session is invalid, just unreachable.
+      // Leave existing state intact so a brief connectivity blip doesn't log the user out.
       console.error('Network error fetching user data:', error);
     }
-  };
+  }, []);
+
+  // Re-verify the session on every client-side route change so protected pages
+  // never render with stale auth state after a session expiry.
+  useEffect(() => {
+    const handleRouteChange = () => {
+      setIsLoading(true);
+      fetchUserData().finally(() => setIsLoading(false));
+    };
+    router.events.on('routeChangeComplete', handleRouteChange);
+    return () => router.events.off('routeChangeComplete', handleRouteChange);
+  }, [router.events, fetchUserData]);
 
   const login = async (newToken, userData) => {
     if (!newToken) return;
@@ -220,7 +225,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Update logout function to handle forced disconnection
   const logout = async (skipApiCall = false, logoutReason = null) => {
     try {
       if (!skipApiCall && user) {
@@ -233,23 +237,17 @@ export const AuthProvider = ({ children }) => {
       // Continue with logout even if API call fails
     } finally {
       localStorage.removeItem('user');
-
-      // The old CSRF token was bound to the old session identity; drop it so
-      // the next mutating request fetches a fresh one against the new (empty)
-      // session.
       invalidateCsrfToken();
 
-      // If there's a logout reason, save it
       if (logoutReason) {
-        localStorage.setItem('logoutReason', logoutReason);
+        // Hard redirect so the entire app re-initialises cleanly — no stale
+        // React state (user, token, CSRF) can survive a full page load.
+        window.location.href = `/login?message=${encodeURIComponent(logoutReason)}`;
       } else {
-        localStorage.removeItem('logoutReason');
+        setToken(null);
+        setUser(null);
+        setSessions([]);
       }
-
-      setToken(null);
-      setUser(null);
-      setSessions([]);
-      logState('After logout');
     }
   };
 
@@ -573,19 +571,19 @@ export const AuthProvider = ({ children }) => {
   }, [token, user, isLoading]);
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      token, 
-      isLoading, 
-      isInitialized, 
-      login, 
-      logout, 
-      changePassword, 
+    <AuthContext.Provider value={{
+      user,
+      token,
+      isLoading,
+      isInitialized,
+      login,
+      logout,
+      refreshAuth: fetchUserData,
+      changePassword,
       deleteAccount,
       checkUsernameAvailability,
       changeUsername,
       updateProfile,
-      // Add session management functions
       sessions,
       sessionsLoading,
       fetchSessions,
@@ -593,7 +591,6 @@ export const AuthProvider = ({ children }) => {
       terminateAllOtherSessions,
       setSessions,
       checkSession,
-      // Add session termination state
       sessionTerminated,
       terminationReason,
       resetSessionTermination

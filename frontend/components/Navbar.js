@@ -7,6 +7,7 @@ import Image from 'next/image';
 const Navbar = () => {
   const { user, logout, isLoading } = useContext(AuthContext);
   const router = useRouter();
+  const isAuthPage = router.pathname === '/login' || router.pathname === '/register';
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const timeoutRef = useRef(null);
@@ -87,7 +88,7 @@ const Navbar = () => {
         <div className="flex items-center gap-3">
           {isLoading ? (
             <div className="w-9 h-9 rounded-full animate-pulse bg-surface-alt" />
-          ) : user ? (
+          ) : user && !isAuthPage ? (
             <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
               <button className="flex items-center focus:outline-none">
                 {user.profileImage ? (
@@ -231,7 +232,7 @@ const Navbar = () => {
         <div className="px-3 py-4 border-t border-border space-y-2 shrink-0">
           {isLoading ? (
             <div className="h-9 rounded animate-pulse bg-surface-alt" />
-          ) : user ? (
+          ) : user && !isAuthPage ? (
             <>
               <div className="px-4 py-2 mb-1">
                 <p className="font-sans text-sm font-medium text-text-primary truncate">{user.username}</p>

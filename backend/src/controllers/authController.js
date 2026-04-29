@@ -10,7 +10,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sessionController = require('./sessionController');
 const { generateTokenPair, refreshAccessToken, revokeRefreshToken, revokeAllRefreshTokens, hashToken } = require('../utils/tokenManager');
-const { setAuthCookie, clearAuthCookie } = require('../utils/authCookie');
+const { setAuthCookie, setRefreshCookie, clearAuthCookie, clearRefreshCookie } = require('../utils/authCookie');
 const { extractToken } = require('../middlewares/authMiddleware');
 const { sanitizeString } = require('../middlewares/enhancedValidation');
 const logger = require('../utils/logger');
@@ -347,9 +347,10 @@ exports.logoutUser = async (req, res) => {
       );
     }
 
-    // Always clear the cookie, regardless of how the client authenticated,
+    // Always clear both cookies, regardless of how the client authenticated,
     // so cookie-based clients get a clean state.
     clearAuthCookie(res);
+    clearRefreshCookie(res);
 
     res.json({ message: 'Logout successful' });
   } catch (error) {
@@ -821,10 +822,11 @@ exports.loginWithRefresh = async (req, res) => {
       ip: req.ip
     });
 
-    // Also issue the httpOnly cookie so this flow works for cookie-based clients.
-    // The refresh token is returned in the response body because clients need
-    // to submit it back via POST /auth/refresh explicitly.
+    // Issue access token as httpOnly cookie and refresh token as a separate
+    // scoped httpOnly cookie — the browser will automatically send the refresh
+    // cookie to POST /api/auth/refresh without JS ever touching the token.
     setAuthCookie(res, tokenPair.accessToken);
+    setRefreshCookie(res, tokenPair.refreshToken);
 
     res.json({
       message: 'Login successful',
@@ -856,7 +858,9 @@ exports.loginWithRefresh = async (req, res) => {
  */
 exports.refreshToken = async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    // Accept refresh token from cookie (preferred — browser sends automatically)
+    // or from request body (for non-browser / API clients).
+    const refreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
 
     if (!refreshToken) {
       return jsonError(res, 400, 'Refresh token required');
@@ -873,6 +877,7 @@ exports.refreshToken = async (req, res) => {
     });
 
     setAuthCookie(res, newTokenPair.accessToken);
+    setRefreshCookie(res, newTokenPair.refreshToken);
 
     res.json({
       message: 'Token refreshed successfully',

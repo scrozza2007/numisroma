@@ -29,11 +29,28 @@ export class ApiError extends Error {
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
+ * Attempt a silent token refresh via the httpOnly refreshToken cookie.
+ * Returns true if the refresh succeeded (new access token cookie is set).
+ */
+const tryRefreshToken = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Main fetch wrapper with error handling, cookie credentials, and CSRF.
  *
  * @param {string} endpoint - API endpoint (e.g., '/api/coins')
  * @param {Object} options - Fetch options. Set `options._retry` internally to
- *                           prevent infinite CSRF retry loops.
+ *                           prevent infinite CSRF/refresh retry loops.
  */
 const apiFetch = async (endpoint, options = {}) => {
   const url = `${API_BASE}${endpoint}`;
@@ -79,10 +96,18 @@ const apiFetch = async (endpoint, options = {}) => {
       const errCode = data.code || null;
 
       // If the server rejected our CSRF token, refresh and retry once.
-      // Guard with `_retry` to prevent infinite loops if things are misconfigured.
       if (response.status === 403 && errCode === 'CSRF_INVALID' && !options._retry) {
         invalidateCsrfToken();
         return apiFetch(endpoint, { ...options, _retry: true });
+      }
+
+      // If the access token expired (but session is NOT terminated), try a
+      // silent refresh via the httpOnly refreshToken cookie and retry once.
+      if (response.status === 401 && errCode !== 'SESSION_TERMINATED' && !data.sessionTerminated && !options._tokenRefreshed) {
+        const refreshed = await tryRefreshToken();
+        if (refreshed) {
+          return apiFetch(endpoint, { ...options, _tokenRefreshed: true });
+        }
       }
 
       throw new ApiError(

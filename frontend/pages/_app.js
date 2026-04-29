@@ -3,25 +3,45 @@ import { AuthProvider } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import Layout from '../components/Layout';
 import ErrorBoundary from '../components/ErrorBoundary';
+import ProtectedRoute from '../components/ProtectedRoute';
 
-function MyApp({ Component, pageProps }) {
-  // Use the page-specific layout when provided
+// Pages that require a valid session — any other route is public.
+const PROTECTED_ROUTES = new Set([
+  '/community',
+  '/profile',
+  '/messages',
+  '/settings',
+  '/collections',
+  '/new-collection',
+  '/edit-collection',
+  '/collection-detail',
+  '/collection-coin-detail',
+  '/add-coin',
+  '/delete-account',
+]);
+
+function MyApp({ Component, pageProps, router }) {
+  const isProtected = PROTECTED_ROUTES.has(router.pathname);
+
+  const content = isProtected
+    ? <ProtectedRoute><Component {...pageProps} /></ProtectedRoute>
+    : <Component {...pageProps} />;
+
   if (Component.getLayout) {
     return (
       <ErrorBoundary>
         <AuthProvider>
-          {Component.getLayout(<Component {...pageProps} />)}
+          {Component.getLayout(content)}
         </AuthProvider>
       </ErrorBoundary>
     );
   }
 
-  // Default layout wraps the page with the navbar
   return (
     <ErrorBoundary>
       <AuthProvider>
         <Layout>
-          <Component {...pageProps} />
+          {content}
         </Layout>
       </AuthProvider>
     </ErrorBoundary>

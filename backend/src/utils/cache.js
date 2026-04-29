@@ -16,26 +16,21 @@ try {
   if (process.env.REDIS_URL || process.env.REDIS_HOST) {
     redisClient = redis.createClient({
       url: process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`,
-      retry_strategy: (options) => {
-        if (options.error && options.error.code === 'ECONNREFUSED') {
-          logger.warn('Redis connection refused, falling back to memory cache');
-          return undefined; // Don't retry
+      socket: {
+        reconnectStrategy: (attempts) => {
+          if (attempts > 10) {
+            logger.error('Redis max retry attempts reached, giving up');
+            return new Error('Redis max retry attempts reached');
+          }
+          return Math.min(attempts * 100, 3000);
         }
-        if (options.total_retry_time > 1000 * 60 * 60) {
-          logger.error('Redis retry time exhausted');
-          return undefined;
-        }
-        if (options.attempt > 10) {
-          logger.error('Redis max retry attempts reached');
-          return undefined;
-        }
-        return Math.min(options.attempt * 100, 3000);
       }
     });
 
     redisClient.on('error', (err) => {
-      logger.warn('Redis client error, using memory cache', { error: err.message });
-      redisClient = null; // Fall back to memory cache
+      // Log the error but do NOT null out redisClient — redis v5 handles reconnection
+      // automatically. Nulling it here would prevent recovery after a transient failure.
+      logger.warn('Redis client error, falling back to memory cache until reconnected', { error: err.message });
     });
 
     redisClient.on('connect', () => {
@@ -46,11 +41,10 @@ try {
       logger.info('Redis ready for operations');
     });
 
-    // Connect to Redis
+    // Connect to Redis (errors are handled by the 'error' event listener above)
     if (redisClient) {
       redisClient.connect().catch((err) => {
-        logger.warn('Failed to connect to Redis, using memory cache', { error: err.message });
-        redisClient = null;
+        logger.warn('Failed to connect to Redis on startup, will retry', { error: err.message });
       });
     }
   }
