@@ -46,22 +46,17 @@ router.get('/:id', validateObjectId('id'), optionalAuthMiddleware, getCoinById);
 // coins into the reference catalog. Protected by auth + role-check.
 router.post('/', authMiddleware, adminMiddleware, createCoin);
 
-// Protected routes
-router.get('/:id/custom-images', validateObjectId('id'), authMiddleware, getCustomImages);
-router.get('/:id/custom-images/obverse', validateObjectId('id'), authMiddleware, async (req, res) => {
+// Protected routes — keyed by collection entry ID (unique per specimen)
+router.get('/entry/:entryId/images', validateObjectId('entryId'), authMiddleware, getCustomImages);
+router.get('/entry/:entryId/images/obverse', validateObjectId('entryId'), authMiddleware, async (req, res) => {
   try {
-    // Validate userId to prevent NoSQL injection (defense in depth)
     if (!mongoose.Types.ObjectId.isValid(req.user.userId)) {
-      logger.security.authFailure('Invalid userId in token', {
-        userId: req.user.userId,
-        ip: req.ip
-      });
+      logger.security.authFailure('Invalid userId in token', { userId: req.user.userId, ip: req.ip });
       return res.status(401).json({ error: 'Invalid authentication' });
     }
-    
     const CoinCustomImage = require('../models/CoinCustomImage');
-    const customImage = await CoinCustomImage.findOne({ 
-      coinId: new mongoose.Types.ObjectId(req.params.id), 
+    const customImage = await CoinCustomImage.findOne({
+      collectionEntryId: new mongoose.Types.ObjectId(req.params.entryId),
       userId: new mongoose.Types.ObjectId(req.user.userId)
     }).select('obverseImageData obverseImageContentType updatedAt');
 
@@ -69,18 +64,8 @@ router.get('/:id/custom-images/obverse', validateObjectId('id'), authMiddleware,
       return res.status(404).send('Image not found');
     }
 
-    // Generate ETag from updatedAt timestamp for cache validation
     const etag = `"${customImage.updatedAt.getTime()}"`;
-    
-    // Check If-None-Match header for conditional requests
-    if (req.headers['if-none-match'] === etag) {
-      return res.status(304).end();
-    }
-
-    let imageData = customImage.obverseImageData;
-    if (imageData && imageData.buffer) {
-      imageData = imageData.buffer;
-    }
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
 
     const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
     res.set('Content-Type', customImage.obverseImageContentType || 'image/webp');
@@ -88,26 +73,21 @@ router.get('/:id/custom-images/obverse', validateObjectId('id'), authMiddleware,
     res.set('ETag', etag);
     res.set('Cross-Origin-Resource-Policy', 'cross-origin');
     res.set('Access-Control-Allow-Origin', allowedOrigin);
-    res.send(imageData);
+    res.send(customImage.obverseImageData);
   } catch (err) {
     logger.error('Error serving obverse image', { error: err.message });
     res.status(500).send('Server error');
   }
 });
-router.get('/:id/custom-images/reverse', validateObjectId('id'), authMiddleware, async (req, res) => {
+router.get('/entry/:entryId/images/reverse', validateObjectId('entryId'), authMiddleware, async (req, res) => {
   try {
-    // Validate userId to prevent NoSQL injection (defense in depth)
     if (!mongoose.Types.ObjectId.isValid(req.user.userId)) {
-      logger.security.authFailure('Invalid userId in token', {
-        userId: req.user.userId,
-        ip: req.ip
-      });
+      logger.security.authFailure('Invalid userId in token', { userId: req.user.userId, ip: req.ip });
       return res.status(401).json({ error: 'Invalid authentication' });
     }
-    
     const CoinCustomImage = require('../models/CoinCustomImage');
-    const customImage = await CoinCustomImage.findOne({ 
-      coinId: new mongoose.Types.ObjectId(req.params.id), 
+    const customImage = await CoinCustomImage.findOne({
+      collectionEntryId: new mongoose.Types.ObjectId(req.params.entryId),
       userId: new mongoose.Types.ObjectId(req.user.userId)
     }).select('reverseImageData reverseImageContentType updatedAt');
 
@@ -115,18 +95,8 @@ router.get('/:id/custom-images/reverse', validateObjectId('id'), authMiddleware,
       return res.status(404).send('Image not found');
     }
 
-    // Generate ETag from updatedAt timestamp for cache validation
     const etag = `"${customImage.updatedAt.getTime()}"`;
-    
-    // Check If-None-Match header for conditional requests
-    if (req.headers['if-none-match'] === etag) {
-      return res.status(304).end();
-    }
-
-    let imageData = customImage.reverseImageData;
-    if (imageData && imageData.buffer) {
-      imageData = imageData.buffer;
-    }
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
 
     const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
     res.set('Content-Type', customImage.reverseImageContentType || 'image/webp');
@@ -134,15 +104,13 @@ router.get('/:id/custom-images/reverse', validateObjectId('id'), authMiddleware,
     res.set('ETag', etag);
     res.set('Cross-Origin-Resource-Policy', 'cross-origin');
     res.set('Access-Control-Allow-Origin', allowedOrigin);
-    res.send(imageData);
+    res.send(customImage.reverseImageData);
   } catch (err) {
     logger.error('Error serving reverse image', { error: err.message });
     res.status(500).send('Server error');
   }
 });
-router.post('/:id/custom-images', validateObjectId('id'), authMiddleware, uploadFields, processCoinImage, updateCoinImages);
-router.put('/:id/images', validateObjectId('id'), authMiddleware, uploadFields, processCoinImage, updateCoinImages);
-router.delete('/:id/custom-images', validateObjectId('id'), authMiddleware, resetCoinImages);
-router.delete('/:id/images', validateObjectId('id'), authMiddleware, resetCoinImages);
+router.post('/entry/:entryId/images', validateObjectId('entryId'), authMiddleware, uploadFields, processCoinImage, updateCoinImages);
+router.delete('/entry/:entryId/images', validateObjectId('entryId'), authMiddleware, resetCoinImages);
 
 module.exports = router;

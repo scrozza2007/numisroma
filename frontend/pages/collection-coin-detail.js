@@ -10,7 +10,7 @@ import { semantic } from '../utils/tokens';
 const CollectionCoinDetail = () => {
   const router = useRouter();
   const { user, isLoading: authLoading } = useContext(AuthContext);
-  const { id, collectionId, weight, diameter, grade, notes } = router.query;
+  const { id, collectionId, entryId, weight, diameter, grade, notes } = router.query;
 
   const [coin, setCoin] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -69,12 +69,14 @@ const CollectionCoinDetail = () => {
   }, [collectionId]);
 
   const fetchCustomImages = useCallback(async () => {
+    if (!entryId) return;
     try {
-      const customImageData = await apiClient.get(`/api/coins/${id}/custom-images`);
+      const customImageData = await apiClient.get(`/api/coins/entry/${entryId}/images`);
       if (customImageData) {
+        const bust = customImageData.updatedAt ? `?v=${new Date(customImageData.updatedAt).getTime()}` : '';
         setCustomImages({
-          obverse: customImageData.obverseImage ? `${process.env.NEXT_PUBLIC_API_URL}${customImageData.obverseImage}` : null,
-          reverse: customImageData.reverseImage ? `${process.env.NEXT_PUBLIC_API_URL}${customImageData.reverseImage}` : null
+          obverse: customImageData.obverseImage ? `${process.env.NEXT_PUBLIC_API_URL}${customImageData.obverseImage}${bust}` : null,
+          reverse: customImageData.reverseImage ? `${process.env.NEXT_PUBLIC_API_URL}${customImageData.reverseImage}${bust}` : null
         });
       } else {
         setCustomImages({ obverse: null, reverse: null });
@@ -84,15 +86,19 @@ const CollectionCoinDetail = () => {
     } finally {
       setCustomImagesLoaded(true);
     }
-  }, [id]);
+  }, [entryId]);
 
   useEffect(() => {
     if (router.query.id && collectionId) {
+      setCustomImages({ obverse: null, reverse: null });
       fetchCoinDetails();
       fetchCollectionData();
-      fetchCustomImages();
+      if (entryId) fetchCustomImages();
     }
-  }, [router.query.id, collectionId, fetchCoinDetails, fetchCollectionData, fetchCustomImages]);
+    // fetchCustomImages is excluded intentionally — it changes when entryId changes,
+    // which is already in deps, avoiding a double-fire loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.query.id, collectionId, entryId]);
 
   const handleEditCoin = () => {
     setEditWeight(weight || '');
@@ -169,7 +175,7 @@ const CollectionCoinDetail = () => {
       const formData = new FormData();
       if (selectedObverseImage) formData.append('obverse', selectedObverseImage);
       if (selectedReverseImage) formData.append('reverse', selectedReverseImage);
-      await apiClient.postFormData(`/api/coins/${id}/custom-images`, formData);
+      await apiClient.postFormData(`/api/coins/entry/${entryId}/images`, formData);
       setNotification({ show: true, message: 'Images uploaded successfully!', type: 'success' });
       setShowImageEditModal(false);
       setSelectedObverseImage(null); setSelectedReverseImage(null);
@@ -186,7 +192,7 @@ const CollectionCoinDetail = () => {
   const handleImageReset = async () => {
     setImageResetLoading(true);
     try {
-      await apiClient.delete(`/api/coins/${id}/custom-images`);
+      await apiClient.delete(`/api/coins/entry/${entryId}/images`);
       setNotification({ show: true, message: 'Images reset to catalog defaults successfully!', type: 'success' });
       setShowImageEditModal(false);
       setSelectedObverseImage(null); setSelectedReverseImage(null);
@@ -354,11 +360,9 @@ const CollectionCoinDetail = () => {
                     onClick={() => handleImageClick(side)}
                   >
                     {customImages[side] ? (
-                      <Image
+                      <img
                         src={customImages[side]} alt={`${side} - ${coin.name}`}
-                        width={400} height={400}
                         className="w-full h-full object-contain"
-                        priority
                       />
                     ) : (
                       <div className="text-center p-4 text-text-muted">

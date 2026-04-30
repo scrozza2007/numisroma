@@ -28,21 +28,20 @@ const CollectionDetailPage = () => {
     }
   }, [user, authLoading, router]);
 
-  const fetchCustomImages = useCallback(async (coins) => {
-    if (!coins || !user) return;
-    const imagesMap = {};
-    for (const coinEntry of coins) {
-      try {
-        const customImageData = await apiClient.get(`/api/coins/${coinEntry.coin._id}/custom-images`);
-        if (customImageData) {
-          imagesMap[coinEntry.coin._id] = {
-            obverse: customImageData.obverseImage ? `${API_URL}${customImageData.obverseImage}` : null,
-            reverse: customImageData.reverseImage ? `${API_URL}${customImageData.reverseImage}` : null
-          };
-        }
-      } catch {}
-    }
-    setCustomImages(imagesMap);
+  const fetchCustomImages = useCallback(async (collectionId) => {
+    if (!collectionId || !user) return;
+    try {
+      const data = await apiClient.get(`/api/collections/${collectionId}/entry-images`);
+      const imagesMap = {};
+      for (const [entryId, img] of Object.entries(data)) {
+        const bust = img.updatedAt ? `?v=${new Date(img.updatedAt).getTime()}` : '';
+        imagesMap[entryId] = {
+          obverse: img.obverseImage ? `${API_URL}${img.obverseImage}${bust}` : null,
+          reverse: img.reverseImage ? `${API_URL}${img.reverseImage}${bust}` : null
+        };
+      }
+      setCustomImages(imagesMap);
+    } catch {}
   }, [user]);
 
   const fetchCollection = useCallback(async () => {
@@ -51,7 +50,7 @@ const CollectionDetailPage = () => {
       const data = await apiClient.get(`/api/collections/${id}`);
       setCollection(data);
       if (data.coins && data.coins.length > 0) {
-        await fetchCustomImages(data.coins);
+        await fetchCustomImages(id);
       }
     } catch (err) {
       const msg = err.status === 404 ? 'Collection not found'
@@ -246,14 +245,14 @@ const CollectionDetailPage = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {collection.coins.map((coinEntry, index) => (
                 <Link
-                  key={index}
-                  href={`/collection-coin-detail?id=${coinEntry.coin._id}&collectionId=${id}${coinEntry.weight ? `&weight=${encodeURIComponent(coinEntry.weight)}` : ''}${coinEntry.diameter ? `&diameter=${encodeURIComponent(coinEntry.diameter)}` : ''}${coinEntry.grade ? `&grade=${encodeURIComponent(coinEntry.grade)}` : ''}${coinEntry.notes ? `&notes=${encodeURIComponent(coinEntry.notes)}` : ''}`}
+                  key={coinEntry._id || index}
+                  href={`/collection-coin-detail?id=${coinEntry.coin._id}&collectionId=${id}&entryId=${coinEntry._id}${coinEntry.weight ? `&weight=${encodeURIComponent(coinEntry.weight)}` : ''}${coinEntry.diameter ? `&diameter=${encodeURIComponent(coinEntry.diameter)}` : ''}${coinEntry.grade ? `&grade=${encodeURIComponent(coinEntry.grade)}` : ''}${coinEntry.notes ? `&notes=${encodeURIComponent(coinEntry.notes)}` : ''}`}
                   className="flex flex-col overflow-hidden rounded-md bg-card border border-border hover:border-amber transition-colors duration-200"
                 >
                   <div className="aspect-square flex items-center justify-center p-4 bg-surface">
-                    {customImages[coinEntry.coin._id]?.obverse ? (
+                    {customImages[coinEntry._id]?.obverse ? (
                       <img
-                        src={customImages[coinEntry.coin._id].obverse}
+                        src={customImages[coinEntry._id].obverse}
                         alt={`${coinEntry.coin.name} - Obverse`}
                         className="w-full h-full object-contain"
                         loading="lazy"

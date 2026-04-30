@@ -233,5 +233,39 @@ router.put('/:collectionId/coins/:coinId', validateObjectId('collectionId'), val
 // Remove a coin from a collection
 router.delete('/:collectionId/coins/:coinId', validateObjectId('collectionId'), validateObjectId('coinId'), authMiddleware, removeCoinFromCollection);
 
+// Batch fetch custom images for all entries in a collection — single query
+// instead of N per-entry requests, preventing rate-limit exhaustion.
+router.get('/:collectionId/entry-images', validateObjectId('collectionId'), authMiddleware, async (req, res) => {
+  try {
+    const Collection = require('../models/Collection');
+    const CoinCustomImage = require('../models/CoinCustomImage');
+
+    const collection = await Collection.findById(req.params.collectionId).select('user coins');
+    if (!collection) return res.status(404).json({ error: 'Collection not found' });
+    if (collection.user.toString() !== req.user.userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    const entryIds = collection.coins.map(e => e._id);
+    const images = await CoinCustomImage.find({
+      collectionEntryId: { $in: entryIds },
+      userId: req.user.userId
+    }).select('collectionEntryId obverseImage reverseImage updatedAt').lean();
+
+    // Return a map of entryId -> { obverseImage, reverseImage, updatedAt }
+    const result = {};
+    for (const img of images) {
+      result[img.collectionEntryId.toString()] = {
+        obverseImage: img.obverseImage || null,
+        reverseImage: img.reverseImage || null,
+        updatedAt: img.updatedAt
+      };
+    }
+    res.json(result);
+  } catch (err) {
+    logger.error('Error fetching collection entry images', { error: err.message });
+    res.status(500).json({ error: 'Failed to fetch entry images' });
+  }
+});
 
 module.exports = router;

@@ -131,7 +131,7 @@ const AddCoinToCollectionPage = () => {
     }
     setAddingCoin(true);
     try {
-      await apiClient.post(`/api/collections/${id}/coins`, {
+      const updatedCollection = await apiClient.post(`/api/collections/${id}/coins`, {
         coin: selectedCoin._id,
         weight: coinDetails.weight || undefined,
         diameter: coinDetails.diameter || undefined,
@@ -140,10 +140,15 @@ const AddCoinToCollectionPage = () => {
       });
       if (selectedObverseImage || selectedReverseImage) {
         try {
-          const formData = new FormData();
-          if (selectedObverseImage) formData.append('obverse', selectedObverseImage);
-          if (selectedReverseImage) formData.append('reverse', selectedReverseImage);
-          await apiClient.postFormData(`/api/coins/${selectedCoin._id}/custom-images`, formData);
+          // Find the newly added entry — it's the last one matching this coin
+          const entries = updatedCollection.coins?.filter(e => (e.coin?._id || e.coin) === selectedCoin._id || e.coin?.toString() === selectedCoin._id);
+          const newEntry = entries?.[entries.length - 1];
+          if (newEntry?._id) {
+            const formData = new FormData();
+            if (selectedObverseImage) formData.append('obverse', selectedObverseImage);
+            if (selectedReverseImage) formData.append('reverse', selectedReverseImage);
+            await apiClient.postFormData(`/api/coins/entry/${newEntry._id}/images`, formData);
+          }
         } catch {}
       }
       setNotification({ show: true, message: 'Coin added successfully!', type: 'success' });

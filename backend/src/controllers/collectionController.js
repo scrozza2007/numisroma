@@ -356,15 +356,8 @@ exports.addCoinToCollection = async (req, res) => {
       return ErrorResponse.notFound(res, 'Coin not found');
     }
 
-    // Atomic conditional push: only add if this coin is not already in the
-    // collection. The filter `coins.coin: { $ne: coin }` guarantees no
-    // duplicates even under concurrent requests.
     const updated = await Collection.findOneAndUpdate(
-      {
-        _id: collectionId,
-        user: req.user.userId,
-        'coins.coin': { $ne: coin }
-      },
+      { _id: collectionId, user: req.user.userId },
       {
         $push: {
           coins: {
@@ -380,13 +373,7 @@ exports.addCoinToCollection = async (req, res) => {
     );
 
     if (!updated) {
-      // Either the collection was deleted underneath us, ownership changed,
-      // or the coin is already present. Report idempotent-like success with
-      // a machine-readable code so the client can decide.
-      return res.status(200).json({
-        message: 'Coin already in collection',
-        code: 'COIN_ALREADY_IN_COLLECTION'
-      });
+      return ErrorResponse.notFound(res, 'Collection not found');
     }
 
     res.status(200).json(updated);

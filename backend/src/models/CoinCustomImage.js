@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 
 const coinCustomImageSchema = new mongoose.Schema({
-  coinId: {
-    type: String,
+  collectionEntryId: {
+    type: mongoose.Schema.Types.ObjectId,
     required: true,
     index: true
   },
@@ -20,7 +20,6 @@ const coinCustomImageSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  // Binary image data persisted in MongoDB
   obverseImageData: {
     type: Buffer
   },
@@ -43,13 +42,12 @@ const coinCustomImageSchema = new mongoose.Schema({
   }
 });
 
-// Compound index to quickly find coin images for a user
-coinCustomImageSchema.index({ coinId: 1, userId: 1 }, { unique: true });
+// One custom-image record per collection entry
+coinCustomImageSchema.index({ collectionEntryId: 1, userId: 1 }, { unique: true });
 
-// Refresh updatedAt on every save
 coinCustomImageSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
 
-module.exports = mongoose.model('CoinCustomImage', coinCustomImageSchema); 
+module.exports = mongoose.model('CoinCustomImage', coinCustomImageSchema);

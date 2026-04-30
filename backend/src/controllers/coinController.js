@@ -687,25 +687,17 @@ exports.getCoinById = async (req, res) => {
   }
 };
 
-// Update custom images for a coin
+// Update custom images for a collection entry
 exports.updateCoinImages = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { entryId } = req.params;
     const userId = req.user.userId;
 
-    const coin = await Coin.findById(id);
-    if (!coin) {
-      return ErrorResponse.notFound(res, 'Coin not found');
-    }
-
-    // Find or create custom images record
-    let customImages = await CoinCustomImage.findOne({ coinId: id, userId });
-    
+    let customImages = await CoinCustomImage.findOne({ collectionEntryId: entryId, userId });
     if (!customImages) {
-      customImages = new CoinCustomImage({ coinId: id, userId });
+      customImages = new CoinCustomImage({ collectionEntryId: entryId, userId });
     }
 
-    // Remove any existing images that are being replaced by the new uploads
     if (req.processedImages.obverse && customImages.obverseImage) {
       deleteImage(customImages.obverseImage);
     }
@@ -713,44 +705,23 @@ exports.updateCoinImages = async (req, res) => {
       deleteImage(customImages.reverseImage);
     }
 
-    // Update with new images
     if (req.processedImages.obverse) {
       customImages.obverseImageData = req.processedImages.obverse.buffer;
       customImages.obverseImageContentType = req.processedImages.obverse.contentType;
-      await customImages.save(); // Persist first so _id is available for the URL below
-      customImages.obverseImage = `/api/coins/${id}/custom-images/obverse`;
+      customImages.obverseImage = `/api/coins/entry/${entryId}/images/obverse`;
     }
     if (req.processedImages.reverse) {
       customImages.reverseImageData = req.processedImages.reverse.buffer;
       customImages.reverseImageContentType = req.processedImages.reverse.contentType;
-      await customImages.save(); // Persist first so _id is available for the URL below
-      customImages.reverseImage = `/api/coins/${id}/custom-images/reverse`;
+      customImages.reverseImage = `/api/coins/entry/${entryId}/images/reverse`;
     }
 
     await customImages.save();
 
-    // Return coin with updated images
-    const updatedCoin = coin.toObject();
-    if (customImages.obverseImage) {
-      updatedCoin.obverse = {
-        ...updatedCoin.obverse,
-        image: customImages.obverseImage
-      };
-    }
-    if (customImages.reverseImage) {
-      updatedCoin.reverse = {
-        ...updatedCoin.reverse,
-        image: customImages.reverseImage
-      };
-    }
-
-    res.json({
-      message: 'Coin images updated successfully',
-      coin: updatedCoin
-    });
+    res.json({ message: 'Coin images updated successfully' });
   } catch (error) {
     logger.error('Error updating coin custom images', {
-      coinId: req.params.id,
+      entryId: req.params.entryId,
       userId: req.user?.userId,
       error: error.message
     });
@@ -758,36 +729,23 @@ exports.updateCoinImages = async (req, res) => {
   }
 };
 
-// Reset custom images for a coin (revert to catalog images)
+// Reset custom images for a collection entry (revert to catalog images)
 exports.resetCoinImages = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { entryId } = req.params;
     const userId = req.user.userId;
 
-    const coin = await Coin.findById(id);
-    if (!coin) {
-      return ErrorResponse.notFound(res, 'Coin not found');
-    }
-
-    const customImages = await CoinCustomImage.findOne({ coinId: id, userId });
-
+    const customImages = await CoinCustomImage.findOne({ collectionEntryId: entryId, userId });
     if (customImages) {
-      if (customImages.obverseImage) {
-        deleteImage(customImages.obverseImage);
-      }
-      if (customImages.reverseImage) {
-        deleteImage(customImages.reverseImage);
-      }
-      await CoinCustomImage.deleteOne({ coinId: id, userId });
+      if (customImages.obverseImage) deleteImage(customImages.obverseImage);
+      if (customImages.reverseImage) deleteImage(customImages.reverseImage);
+      await CoinCustomImage.deleteOne({ collectionEntryId: entryId, userId });
     }
 
-    res.json({
-      message: 'Coin images reset to catalog defaults successfully',
-      coin
-    });
+    res.json({ message: 'Coin images reset to catalog defaults successfully' });
   } catch (error) {
     logger.error('Error resetting coin custom images', {
-      coinId: req.params.id,
+      entryId: req.params.entryId,
       userId: req.user?.userId,
       error: error.message
     });
@@ -795,20 +753,13 @@ exports.resetCoinImages = async (req, res) => {
   }
 };
 
-// Get only custom images for a coin. Returns `null` when the user has no
-// custom images for this coin — existing frontends rely on this shape, so
-// we preserve it rather than introduce a breaking envelope change.
+// Get custom images for a collection entry.
 exports.getCustomImages = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { entryId } = req.params;
     const userId = req.user.userId;
 
-    const coin = await Coin.exists({ _id: id });
-    if (!coin) {
-      return ErrorResponse.notFound(res, 'Coin not found');
-    }
-
-    const customImages = await CoinCustomImage.findOne({ coinId: id, userId }).lean();
+    const customImages = await CoinCustomImage.findOne({ collectionEntryId: entryId, userId }).lean();
 
     if (!customImages) {
       return res.json(null);
@@ -822,7 +773,7 @@ exports.getCustomImages = async (req, res) => {
     });
   } catch (error) {
     logger.error('Error fetching coin custom images', {
-      coinId: req.params.id,
+      entryId: req.params.entryId,
       userId: req.user?.userId,
       error: error.message
     });
