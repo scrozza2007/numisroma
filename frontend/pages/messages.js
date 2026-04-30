@@ -97,17 +97,17 @@ const Messages = () => {
   }, [user, fetchConversations]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && user && selectedConversation) {
-      pollingRef.current = setInterval(() => fetchMessages(selectedConversation._id, true), 3000);
-      return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
-    }
+    if (typeof window === 'undefined' || !user || !selectedConversation) return;
+    const tick = () => { if (!document.hidden) fetchMessages(selectedConversation._id, true); };
+    pollingRef.current = setInterval(tick, 8000);
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, [user, selectedConversation, fetchMessages]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && user) {
-      const conversationPolling = setInterval(() => fetchConversations(true), 5000);
-      return () => clearInterval(conversationPolling);
-    }
+    if (typeof window === 'undefined' || !user) return;
+    const tick = () => { if (!document.hidden) fetchConversations(true); };
+    const conversationPolling = setInterval(tick, 15000);
+    return () => clearInterval(conversationPolling);
   }, [user, fetchConversations]);
 
   const markAsRead = async (conversationId) => {

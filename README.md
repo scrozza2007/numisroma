@@ -188,8 +188,11 @@ See `backend/.env.example` and `.env.example` for the full list.
 
 ### Messages
 - `GET /api/messages/conversations` — All conversations *(auth)*
+- `GET /api/messages/conversations/:otherUserId` — Get or create 1:1 conversation *(auth)*
+- `GET /api/messages/search/users?query=` — Search users to message *(auth)*
 - `GET /api/messages/:conversationId` — Messages in thread *(auth)*
 - `POST /api/messages/:conversationId` — Send message *(auth)*
+- `PUT /api/messages/:conversationId/read` — Mark conversation as read *(auth)*
 
 📖 **Full API documentation:** [docs/api.md](docs/api.md)
 
@@ -223,8 +226,9 @@ See `backend/.env.example` and `.env.example` for the full list.
 - Auto-skipped for non-browser clients (no auth cookie)
 
 ✅ **Rate Limiting**
-- General: 100 req / 15 min
+- General: 300 req / 15 min
 - Auth routes: 20 req / 15 min
+- Search: 30 req / min
 - Contact: 5 req / hr
 - Redis-backed with automatic in-memory fallback
 

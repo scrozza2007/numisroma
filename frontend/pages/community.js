@@ -44,7 +44,7 @@ const Community = () => {
     try {
       setLoading(true);
       const data = await apiClient.get(`/api/users?search=${encodeURIComponent(searchTerm)}`);
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : data.users || []);
       setRecommendedUsers([]);
     } catch {}
     finally { setLoading(false); }

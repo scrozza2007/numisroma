@@ -74,37 +74,20 @@ const getOrCreateConversation = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const conversation = await Conversation.findOneAndUpdate(
-      {
-        participants: { $all: [userId, otherUserId], $size: 2 }
-      },
-      {
-        $setOnInsert: {
-          participants: [userId, otherUserId],
-          lastActivity: new Date()
-        }
-      },
-      {
-        new: true,
-        upsert: true,
-        setDefaultsOnInsert: true
-      }
-    ).populate('participants', 'username fullName avatar');
+    let conversation = await Conversation.findOne({
+      participants: { $all: [userId, otherUserId], $size: 2 }
+    }).populate('participants', 'username fullName avatar');
+
+    if (!conversation) {
+      conversation = await Conversation.create({
+        participants: [userId, otherUserId],
+        lastActivity: new Date()
+      });
+      conversation = await conversation.populate('participants', 'username fullName avatar');
+    }
 
     res.json(conversation);
   } catch (error) {
-    // If a future unique index on participants triggers an E11000 duplicate
-    // key, fall back to a simple read: it is cheap and idempotent.
-    if (error && error.code === 11000) {
-      try {
-        const existing = await Conversation.findOne({
-          participants: { $all: [req.user.userId, req.params.otherUserId], $size: 2 }
-        }).populate('participants', 'username fullName avatar');
-        if (existing) return res.json(existing);
-      } catch (retryErr) {
-        logger.error('Conversation upsert retry failed', { error: retryErr.message });
-      }
-    }
     logger.error('Error getting/creating conversation', { error: error.message });
     res.status(500).json({ message: 'Server error' });
   }

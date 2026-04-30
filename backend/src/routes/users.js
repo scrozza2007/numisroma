@@ -384,25 +384,16 @@ router.get('/:id/chat', validateObjectId('id'), authMiddleware, async (req, res)
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const conversation = await Conversation.findOneAndUpdate(
-      {
-        participants: {
-          $all: [currentUserId, otherUserId],
-          $size: 2
-        }
-      },
-      {
-        $setOnInsert: {
-          participants: [currentUserId, otherUserId],
-          lastActivity: new Date()
-        }
-      },
-      {
-        new: true,
-        upsert: true,
-        setDefaultsOnInsert: true
-      }
-    );
+    let conversation = await Conversation.findOne({
+      participants: { $all: [currentUserId, otherUserId], $size: 2 }
+    });
+
+    if (!conversation) {
+      conversation = await Conversation.create({
+        participants: [currentUserId, otherUserId],
+        lastActivity: new Date()
+      });
+    }
 
     res.json({
       conversationId: conversation._id,

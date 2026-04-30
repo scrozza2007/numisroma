@@ -446,11 +446,15 @@ DELETE /api/users/:id/unfollow
 GET /api/users/:id/followers?page=1&limit=20
 ```
 
+Returns `{ users: [...], pagination: { page, limit, total, pages, hasMore } }`.
+
 ### Following list
 
 ```http
 GET /api/users/:id/following?page=1&limit=20
 ```
+
+Returns `{ users: [...], pagination: { page, limit, total, pages, hasMore } }`.
 
 ### User activity
 
@@ -472,29 +476,67 @@ Returns `{ conversationId, user }`. Creates the conversation if it doesn't exist
 
 ## Messages — `/api/messages`
 
+All message endpoints require authentication.
+
 ### Get conversations
 
 ```http
-GET /api/messages/conversations
-Authorization: Bearer <token>
+GET /api/messages/conversations?page=1&limit=30
 ```
+
+Returns `{ conversations: [...], pagination: { page, limit, total, pages, hasMore } }`.
+Each conversation includes populated `participants` and the last message preview.
+
+### Get or create a 1:1 conversation
+
+```http
+GET /api/messages/conversations/:otherUserId
+```
+
+Returns the existing conversation between the current user and `:otherUserId`, or
+creates one if none exists. Returns the full conversation document with populated
+participants. Returns `400` if `:otherUserId` is the current user, `404` if the
+user doesn't exist.
+
+### Search users to message
+
+```http
+GET /api/messages/search/users?query=<string>
+```
+
+Returns up to 10 users matching the query (username or full name). Query must be
+≥ 2 and ≤ 100 characters. Returns a plain array — never exposes email addresses.
 
 ### Get messages in a conversation
 
 ```http
 GET /api/messages/:conversationId
-Authorization: Bearer <token>
 ```
 
 ### Send a message
 
 ```http
 POST /api/messages/:conversationId
-Authorization: Bearer <token>
 Content-Type: application/json
 
-{ "content": "string" }
+{ "content": "string (≤5000 chars)", "messageType": "text" }
 ```
+
+### Mark conversation as read
+
+```http
+PUT /api/messages/:conversationId/read
+```
+
+Marks all messages in the conversation as read for the current user.
+
+### Get unread count
+
+```http
+GET /api/messages/unread-count
+```
+
+Returns `{ unreadCount: <number> }` — total unread messages across all conversations.
 
 ---
 

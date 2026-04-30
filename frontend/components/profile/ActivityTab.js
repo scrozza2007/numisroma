@@ -76,7 +76,8 @@ const ActivityTab = ({ activities, loadingActivities, user, profile }) => {
                           >
                             {activity.user.username}
                           </span>{' '}
-                          started following you
+                          started following{' '}
+                          {user && user._id === profile._id ? 'you' : profile.username}
                         </p>
                       )}
                       <p className="font-sans text-xs mt-1 text-text-muted">

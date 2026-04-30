@@ -108,14 +108,20 @@ const ProfilePage = () => {
 
   const loadFollowers = async () => {
     setLoadingFollowers(true);
-    try { setFollowers(await apiClient.get(`/api/users/${id}/followers`)); }
+    try {
+      const data = await apiClient.get(`/api/users/${id}/followers`);
+      setFollowers(Array.isArray(data) ? data : data.users || []);
+    }
     catch (err) { notify(err.message || 'Error loading followers', 'error'); }
     finally { setLoadingFollowers(false); }
   };
 
   const loadFollowing = async () => {
     setLoadingFollowing(true);
-    try { setFollowing(await apiClient.get(`/api/users/${id}/following`)); }
+    try {
+      const data = await apiClient.get(`/api/users/${id}/following`);
+      setFollowing(Array.isArray(data) ? data : data.users || []);
+    }
     catch (err) { notify(err.message || 'Error loading following', 'error'); }
     finally { setLoadingFollowing(false); }
   };

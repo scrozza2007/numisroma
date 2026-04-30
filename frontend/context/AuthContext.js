@@ -162,6 +162,28 @@ export const AuthProvider = ({ children }) => {
     return () => router.events.off('routeChangeComplete', handleRouteChange);
   }, [router.events, fetchUserData]);
 
+  // Detect when another tab logs in as a different user (or logs out).
+  // localStorage.user is written on every login/logout, so a storage event
+  // fires in all other same-origin tabs. If the identity changed, redirect
+  // to login immediately so the stale tab can't keep acting as the old user.
+  useEffect(() => {
+    const handleStorage = (e) => {
+      if (e.key !== 'user') return;
+      const prev = user?._id || user?.id;
+      let nextId = null;
+      try { nextId = e.newValue ? JSON.parse(e.newValue)?._id : null; } catch {}
+      if (prev && nextId !== prev) {
+        // Different user (or logged out) in another tab — clean up and redirect.
+        invalidateCsrfToken();
+        setToken(null);
+        setUser(null);
+        window.location.href = '/login?message=' + encodeURIComponent('You were signed out because another account was used in a different tab.');
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [user]);
+
   const login = async (newToken, userData) => {
     if (!newToken) return;
 
