@@ -59,6 +59,10 @@ const UserSchema = new Schema({
   lockoutUntil: {
     type: Date,
     default: null
+  },
+  isPrivate: {
+    type: Boolean,
+    default: false
   }
 }, { timestamps: true });
 

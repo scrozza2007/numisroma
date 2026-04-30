@@ -406,8 +406,7 @@ All user endpoints require authentication.
 GET /api/users?search=username&page=1&limit=20
 ```
 
-Returns paginated user list with `isFollowing` flag. Max 50 per page.
-Never exposes email addresses.
+Returns paginated user list with `followStatus` (`none` | `pending` | `accepted`) and `isPrivate` per user. Max 50 per page. Never exposes email addresses.
 
 ### Recommended users
 
@@ -423,8 +422,12 @@ Returns up to 3 users the current user isn't following, ranked by follower count
 GET /api/users/:id/profile
 ```
 
-Returns public profile data: username, bio, follower/following/coin counts, and
-`isFollowing` for the current user.
+Returns:
+- `username`, `avatar`, `bio`, `createdAt`, `isPrivate`
+- `followersCount`, `followingCount`, `coinsCount` (accepted follows only)
+- `isFollowing` (bool), `followStatus` (`none` | `pending` | `accepted`)
+- `hasPendingRequestFromThem` — `true` if the profile owner has sent *you* a pending follow request
+- `pendingFollowRequestsCount` — only non-zero on your own profile
 
 ### Follow a user
 
@@ -432,7 +435,13 @@ Returns public profile data: username, bio, follower/following/coin counts, and
 POST /api/users/:id/follow
 ```
 
-Race-safe (upsert). Returns `201` on success, `200` if already following.
+If the target profile is **public**: creates an accepted follow + `new_follower` notification. Returns `{ followStatus: 'accepted' }`.
+
+If the target profile is **private**: creates a pending follow request + `follow_request` notification. Returns `{ followStatus: 'pending' }`.
+
+Returns `200` if a follow relationship already exists.
+
+Also deletes the corresponding `new_follower`/`follow_request` notification if unfollowing immediately after.
 
 ### Unfollow a user
 
@@ -440,13 +449,50 @@ Race-safe (upsert). Returns `201` on success, `200` if already following.
 DELETE /api/users/:id/unfollow
 ```
 
+Removes the follow document and deletes the `new_follower` or `follow_request` notification that was created when following.
+
+### Accept a follow request
+
+```http
+POST /api/users/:id/follow-request/accept
+```
+
+`:id` is the requester's user ID. Updates the pending follow to `accepted`, deletes the `follow_request` notification, and sends a `follow_accepted` notification to the requester.
+
+### Decline a follow request
+
+```http
+POST /api/users/:id/follow-request/decline
+```
+
+`:id` is the requester's user ID. Deletes the pending follow document and the `follow_request` notification.
+
+### List pending follow requests
+
+```http
+GET /api/users/:id/follow-requests?page=1&limit=20
+```
+
+`:id` must match the authenticated user (403 otherwise). Returns `{ requests: [<user>], pagination }`.
+
+### Update privacy setting
+
+```http
+PUT /api/users/me/privacy
+Content-Type: application/json
+
+{ "isPrivate": true }
+```
+
+Switches the profile between public and private. Switching from private → public auto-accepts all pending follow requests.
+
 ### Followers list
 
 ```http
 GET /api/users/:id/followers?page=1&limit=20
 ```
 
-Returns `{ users: [...], pagination: { page, limit, total, pages, hasMore } }`.
+Returns `{ users: [...], pagination }`. Only includes `status: 'accepted'` follows.
 
 ### Following list
 
@@ -454,7 +500,7 @@ Returns `{ users: [...], pagination: { page, limit, total, pages, hasMore } }`.
 GET /api/users/:id/following?page=1&limit=20
 ```
 
-Returns `{ users: [...], pagination: { page, limit, total, pages, hasMore } }`.
+Returns `{ users: [...], pagination }`. Only includes `status: 'accepted'` follows.
 
 ### User activity
 
@@ -462,7 +508,7 @@ Returns `{ users: [...], pagination: { page, limit, total, pages, hasMore } }`.
 GET /api/users/:id/activity
 ```
 
-Returns recent follow events for the user (up to 10).
+Returns recent follow events for the user (up to 10). On the frontend this is merged with collection creation events and only shown in full on the user's own profile.
 
 ### Create or get a direct-message chat
 
@@ -471,6 +517,60 @@ GET /api/users/:id/chat
 ```
 
 Returns `{ conversationId, user }`. Creates the conversation if it doesn't exist.
+
+Returns `403` with `code: 'PRIVATE_PROFILE'` if the target profile is private and the caller is not an accepted follower.
+
+---
+
+## Notifications — `/api/notifications`
+
+All notification endpoints require authentication.
+
+### SSE stream
+
+```http
+GET /api/notifications/stream
+```
+
+Opens a Server-Sent Events stream. Each event is a JSON object:
+
+```json
+{ "notifications": 3, "messages": 1 }
+```
+
+The server sends initial counts immediately on connect, then pushes updates whenever the counts change. Only one connection per user is kept alive — opening a new one closes the previous one. A `: ping` comment is sent every 30 seconds as a keepalive.
+
+On the frontend, the Navbar holds the single SSE connection and re-broadcasts each event to a `BroadcastChannel('numisroma:notifications')` so other pages (notifications list, profile) can react without opening competing streams.
+
+### Get notifications
+
+```http
+GET /api/notifications?page=1&limit=20
+```
+
+Returns `{ notifications: [...], pagination }`. Each notification includes a populated `sender` (username, avatar).
+
+Notification `type` values: `follow_request` | `follow_accepted` | `new_follower` | `new_message`.
+
+### Get unread count
+
+```http
+GET /api/notifications/unread-count
+```
+
+Returns `{ count: <number> }`.
+
+### Mark one as read
+
+```http
+PUT /api/notifications/:id/read
+```
+
+### Mark all as read
+
+```http
+PUT /api/notifications/read-all
+```
 
 ---
 
@@ -493,10 +593,9 @@ Each conversation includes populated `participants` and the last message preview
 GET /api/messages/conversations/:otherUserId
 ```
 
-Returns the existing conversation between the current user and `:otherUserId`, or
-creates one if none exists. Returns the full conversation document with populated
-participants. Returns `400` if `:otherUserId` is the current user, `404` if the
-user doesn't exist.
+Returns the existing conversation between the current user and `:otherUserId`, or creates one if none exists. Returns the full conversation document with populated participants.
+
+Returns `400` if `:otherUserId` is the current user, `404` if the user doesn't exist, `403` with `code: 'PRIVATE_PROFILE'` if the target profile is private and the caller is not an accepted follower.
 
 ### Search users to message
 

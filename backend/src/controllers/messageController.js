@@ -1,8 +1,10 @@
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
+const Notification = require('../models/Notification');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 const { PAGINATION } = require('../config/constants');
+const { createNotification } = require('./notificationController');
 
 /**
  * Escape special regex characters to prevent ReDoS attacks
@@ -69,9 +71,21 @@ const getOrCreateConversation = async (req, res) => {
       return res.status(400).json({ message: 'Cannot start a conversation with yourself' });
     }
 
-    const otherUser = await User.exists({ _id: otherUserId });
+    const otherUser = await User.findById(otherUserId).select('isPrivate').lean();
     if (!otherUser) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Block messaging a private profile unless the sender is an accepted follower.
+    if (otherUser.isPrivate) {
+      const Follow = require('../models/Follow');
+      const isFollowing = await Follow.exists({ follower: userId, following: otherUserId, status: 'accepted' });
+      if (!isFollowing) {
+        return res.status(403).json({
+          message: 'This account is private. Follow them to send a message.',
+          code: 'PRIVATE_PROFILE'
+        });
+      }
     }
 
     let conversation = await Conversation.findOne({
@@ -186,6 +200,32 @@ const sendMessage = async (req, res) => {
       { _id: conversationId },
       { $set: { lastMessage: message._id, lastActivity: new Date() } }
     );
+
+    // Notify the other participant — cap at 1 unread notification per conversation.
+    try {
+      const conversation = await Conversation.findById(conversationId).select('participants').lean();
+      if (conversation) {
+        const recipientId = conversation.participants.find(p => String(p) !== String(userId));
+        if (recipientId) {
+          const existingUnread = await Notification.findOne({
+            recipient: recipientId,
+            type: 'new_message',
+            relatedConversation: conversationId,
+            isRead: false
+          });
+          if (!existingUnread) {
+            await createNotification({
+              recipient: recipientId,
+              sender: userId,
+              type: 'new_message',
+              relatedConversation: conversationId
+            });
+          }
+        }
+      }
+    } catch (notifErr) {
+      logger.warn('Failed to create message notification', { error: notifErr.message });
+    }
 
     res.status(201).json(message);
   } catch (error) {

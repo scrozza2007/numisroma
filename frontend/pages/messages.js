@@ -13,6 +13,9 @@ const COMMON_EMOJIS = [
   '😴', '🤣', '😭', '😱', '🤩', '😇', '🤪', '😅'
 ];
 
+const formatTime = (dateString) =>
+  new Date(dateString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
 const Messages = () => {
   const [conversations, setConversations] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState(null);
@@ -25,11 +28,18 @@ const Messages = () => {
   const [notifications, setNotifications] = useState([]);
   const [lastMessageId, setLastMessageId] = useState(null);
   const pollingRef = useRef(null);
+  const convPollingRef = useRef(null);
+  const sseRef = useRef(null);
   const { user, isLoading: authLoading } = useContext(AuthContext);
   const router = useRouter();
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef(null);
   const inputRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const selectedConvRef = useRef(null);
+
+  // Keep a ref in sync so SSE handler can read current conversation without stale closure.
+  useEffect(() => { selectedConvRef.current = selectedConversation; }, [selectedConversation]);
 
   const addNotification = (message, type = 'info') => {
     const id = Date.now();
@@ -96,19 +106,54 @@ const Messages = () => {
     if (typeof window !== 'undefined' && user) fetchConversations();
   }, [user, fetchConversations]);
 
+  // SSE for real-time message notifications.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !user) return;
+
+    let es;
+    const connect = () => {
+      try {
+        es = new EventSource('/api/notifications/stream', { withCredentials: true });
+        sseRef.current = es;
+        es.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            // If messages count changed, refresh the current conversation immediately.
+            if (typeof data.messages === 'number') {
+              const conv = selectedConvRef.current;
+              if (conv) fetchMessages(conv._id, true);
+              fetchConversations(true);
+            }
+          } catch {}
+        };
+        es.onerror = () => { es.close(); };
+      } catch {}
+    };
+
+    connect();
+    return () => { if (es) es.close(); };
+  }, [user, fetchMessages, fetchConversations]);
+
+  // Fallback polling for messages (20s, SSE handles fast path).
   useEffect(() => {
     if (typeof window === 'undefined' || !user || !selectedConversation) return;
     const tick = () => { if (!document.hidden) fetchMessages(selectedConversation._id, true); };
-    pollingRef.current = setInterval(tick, 8000);
+    pollingRef.current = setInterval(tick, 20000);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, [user, selectedConversation, fetchMessages]);
 
+  // Fallback polling for conversations list (30s).
   useEffect(() => {
     if (typeof window === 'undefined' || !user) return;
     const tick = () => { if (!document.hidden) fetchConversations(true); };
-    const conversationPolling = setInterval(tick, 15000);
-    return () => clearInterval(conversationPolling);
+    convPollingRef.current = setInterval(tick, 30000);
+    return () => clearInterval(convPollingRef.current);
   }, [user, fetchConversations]);
+
+  // Scroll to bottom when messages change.
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const markAsRead = async (conversationId) => {
     try { await apiClient.put(`/api/messages/${conversationId}/read`); } catch {}
@@ -156,12 +201,9 @@ const Messages = () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  /* On mobile, track whether the chat panel is shown */
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
 
   const getOtherUser = (conversation) => conversation.participants.find(p => p._id !== user._id);
-
-  const formatTime = (dateString) => new Date(dateString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -177,6 +219,21 @@ const Messages = () => {
     inputRef.current?.focus();
   };
 
+  // Compute read receipt: last message the other user has read.
+  const getReadReceipt = () => {
+    if (!selectedConversation || messages.length === 0) return null;
+    const otherUser = getOtherUser(selectedConversation);
+    if (!otherUser) return null;
+    // Walk backwards to find the last message sent by me that the other user has read.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.sender._id === user._id && msg.readBy?.some(r => r.user === otherUser._id || r.user?._id === otherUser._id)) {
+        return { messageId: msg._id, readAt: msg.readBy.find(r => r.user === otherUser._id || r.user?._id === otherUser._id)?.readAt };
+      }
+    }
+    return null;
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-canvas">
@@ -186,6 +243,8 @@ const Messages = () => {
   }
 
   if (!user) return null;
+
+  const readReceipt = getReadReceipt();
 
   return (
     <>
@@ -207,9 +266,8 @@ const Messages = () => {
 
       <div className="h-full w-full bg-canvas">
         <div className="flex h-full w-full">
-          {/* Conversations Sidebar — full width on mobile, fixed width on desktop */}
+          {/* Conversations Sidebar */}
           <div className={`flex flex-col shrink-0 bg-card border-r border-border w-full md:w-72 ${mobileChatOpen ? 'hidden md:flex' : 'flex'}`}>
-            {/* Header */}
             <div className="p-4 border-b border-border">
               <div className="flex items-center justify-between">
                 <h1 className="font-display font-semibold text-xl text-text-primary">Messages</h1>
@@ -231,7 +289,6 @@ const Messages = () => {
                     onChange={e => { setSearchUsers(e.target.value); searchUsersForChat(e.target.value); }}
                     className="w-full px-3 py-2 font-sans text-sm bg-surface border border-border rounded outline-none focus:border-amber transition-colors duration-150 text-text-primary"
                   />
-
                   {foundUsers.length > 0 && (
                     <div className="mt-1.5 max-h-40 overflow-y-auto border border-border rounded-md bg-card">
                       {foundUsers.map(foundUser => (
@@ -240,7 +297,7 @@ const Messages = () => {
                           onClick={() => startConversation(foundUser._id)}
                           className="flex items-center gap-2.5 p-2.5 cursor-pointer transition-colors duration-100 hover:bg-surface-alt"
                         >
-                          <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-amber-bg">
+                          <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-amber-bg overflow-hidden">
                             {foundUser.avatar ? (
                               <Image src={foundUser.avatar} alt={foundUser.username} width={32} height={32} className="rounded-full" />
                             ) : (
@@ -259,7 +316,6 @@ const Messages = () => {
               )}
             </div>
 
-            {/* Conversations List */}
             <div className="flex-1 overflow-y-auto">
               {loading ? (
                 <div className="p-4 text-center">
@@ -281,13 +337,14 @@ const Messages = () => {
                         setSelectedConversation(conversation);
                         setLastMessageId(null);
                         fetchMessages(conversation._id);
+                        markAsRead(conversation._id);
                         setMobileChatOpen(true);
                       }}
                       className={`flex items-center gap-3 p-3.5 cursor-pointer transition-colors duration-100 border-b border-border ${isSelected ? 'bg-amber-bg border-l-[3px] border-l-amber' : 'hover:bg-surface-alt border-l-[3px] border-l-transparent'}`}
                     >
-                      <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-amber-bg">
+                      <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-amber-bg overflow-hidden">
                         {otherUser?.avatar ? (
-                          <Image src={otherUser.avatar} alt={otherUser.username} width={40} height={40} className="rounded-full" />
+                          <Image src={otherUser.avatar} alt={otherUser.username} width={40} height={40} className="rounded-full object-cover" />
                         ) : (
                           <span className="font-display font-semibold text-amber">{otherUser?.username?.charAt(0).toUpperCase()}</span>
                         )}
@@ -298,7 +355,7 @@ const Messages = () => {
                         </p>
                         {conversation.lastMessage && (
                           <p className="font-sans text-xs truncate text-text-muted">
-                            {conversation.lastMessage.content}
+                            {conversation.lastMessage.isDeleted ? 'Message deleted' : conversation.lastMessage.content}
                           </p>
                         )}
                       </div>
@@ -314,13 +371,12 @@ const Messages = () => {
             </div>
           </div>
 
-          {/* Chat Area — hidden on mobile when no chat selected */}
+          {/* Chat Area */}
           <div className={`flex-1 flex-col bg-canvas ${mobileChatOpen ? 'flex' : 'hidden md:flex'}`}>
             {selectedConversation ? (
               <>
                 {/* Chat Header */}
                 <div className="flex items-center gap-3 p-4 border-b border-border bg-card">
-                  {/* Back button — mobile only */}
                   <button
                     onClick={() => setMobileChatOpen(false)}
                     className="md:hidden flex items-center justify-center w-8 h-8 rounded text-text-muted hover:text-text-primary transition-colors duration-150 shrink-0"
@@ -330,12 +386,12 @@ const Messages = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
                     </svg>
                   </button>
-                  <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-amber-bg">
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-amber-bg overflow-hidden">
                     {getOtherUser(selectedConversation)?.avatar ? (
                       <Image
                         src={getOtherUser(selectedConversation).avatar}
                         alt={getOtherUser(selectedConversation).username}
-                        width={36} height={36} className="rounded-full"
+                        width={36} height={36} className="rounded-full object-cover"
                       />
                     ) : (
                       <span className="font-display font-semibold text-amber">
@@ -355,19 +411,29 @@ const Messages = () => {
 
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {messages.map(message => {
+                  {messages.map((message, idx) => {
                     const isOwn = message.sender._id === user._id;
+                    const isLast = idx === messages.length - 1;
                     return (
                       <div key={message._id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[75%] sm:max-w-xs lg:max-w-md px-4 py-2 rounded-md ${isOwn ? 'bg-text-primary text-canvas' : 'bg-card border border-border text-text-primary'}`}>
-                          <p className="font-sans text-sm">{message.content}</p>
-                          <p className={`font-sans text-xs mt-1 ${isOwn ? 'text-[rgba(253,248,240,0.6)]' : 'text-text-muted'}`}>
-                            {formatTime(message.createdAt)}
-                          </p>
+                        <div>
+                          <div className={`max-w-[75%] sm:max-w-xs lg:max-w-md px-4 py-2 rounded-md ${isOwn ? 'bg-text-primary text-canvas' : 'bg-card border border-border text-text-primary'}`}>
+                            <p className="font-sans text-sm">{message.content}</p>
+                            <p className={`font-sans text-xs mt-1 ${isOwn ? 'text-[rgba(253,248,240,0.6)]' : 'text-text-muted'}`}>
+                              {formatTime(message.createdAt)}
+                            </p>
+                          </div>
+                          {/* Read receipt under the last own message the other user has read */}
+                          {isOwn && isLast && readReceipt?.messageId === message._id && (
+                            <p className="font-sans text-[10px] text-text-muted text-right mt-0.5">
+                              Seen {readReceipt.readAt ? formatTime(readReceipt.readAt) : ''}
+                            </p>
+                          )}
                         </div>
                       </div>
                     );
                   })}
+                  <div ref={messagesEndRef} />
                 </div>
 
                 {/* Message Input */}

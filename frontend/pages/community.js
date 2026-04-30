@@ -62,15 +62,27 @@ const Community = () => {
     return () => clearTimeout(timer);
   }, [searchTerm, user, authLoading, searchUsers, fetchRecommendedUsers]);
 
-  const toggleFollow = async (userId, isFollowing) => {
+  const toggleFollow = async (userId, currentStatus) => {
     if (!user) { router.push('/login'); return; }
     try {
-      if (isFollowing) await apiClient.delete(`/api/users/${userId}/unfollow`);
-      else await apiClient.post(`/api/users/${userId}/follow`);
-      const update = (list) => list.map((u) => u._id === userId ? { ...u, isFollowing: !isFollowing } : u);
+      let newStatus;
+      if (currentStatus === 'accepted' || currentStatus === 'pending') {
+        await apiClient.delete(`/api/users/${userId}/unfollow`);
+        newStatus = 'none';
+      } else {
+        const data = await apiClient.post(`/api/users/${userId}/follow`);
+        newStatus = data.followStatus ?? 'accepted';
+      }
+      const update = (list) => list.map((u) =>
+        u._id === userId ? { ...u, isFollowing: newStatus === 'accepted', followStatus: newStatus } : u
+      );
       setUsers(update(users));
       setRecommendedUsers(update(recommendedUsers));
-      setNotification({ show: true, message: isFollowing ? 'Unfollowed successfully' : 'Now following', type: 'success' });
+      const msg = currentStatus === 'accepted' ? 'Unfollowed successfully'
+        : currentStatus === 'pending' ? 'Follow request cancelled'
+        : newStatus === 'pending' ? 'Follow request sent'
+        : 'Now following';
+      setNotification({ show: true, message: msg, type: 'success' });
       setTimeout(() => setNotification({ show: false, message: '', type: '' }), 3000);
     } catch {
       setNotification({ show: true, message: 'An error occurred. Please try again.', type: 'error' });
@@ -81,6 +93,8 @@ const Community = () => {
   const UserCard = ({ user: profileUser }) => {
     const initials = profileUser.username.charAt(0).toUpperCase();
     const r = useRouter();
+    const followStatus = profileUser.followStatus ?? (profileUser.isFollowing ? 'accepted' : 'none');
+    const btnLabel = followStatus === 'accepted' ? 'Following' : followStatus === 'pending' ? 'Requested' : '+ Follow';
     return (
       <div
         className="flex items-center justify-between p-4 cursor-pointer transition-colors duration-150 bg-card border border-border rounded-lg hover:border-border-strong"
@@ -96,18 +110,27 @@ const Community = () => {
           )}
           <div>
             <p className="font-sans text-sm font-semibold text-text-primary">@{profileUser.username}</p>
-            <p className="font-sans text-xs text-text-muted">{profileUser.email}</p>
+            {profileUser.isPrivate && (
+              <p className="font-sans text-xs text-text-muted flex items-center gap-1">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                Private
+              </p>
+            )}
           </div>
         </div>
         <button
-          onClick={e => { e.stopPropagation(); toggleFollow(profileUser._id, profileUser.isFollowing); }}
+          onClick={e => { e.stopPropagation(); toggleFollow(profileUser._id, followStatus); }}
           className={`font-sans text-sm px-4 py-1.5 rounded-md transition-colors duration-150 ${
-            profileUser.isFollowing
+            followStatus === 'accepted'
               ? 'border border-border bg-card text-text-secondary hover:bg-surface-alt hover:text-text-primary'
+              : followStatus === 'pending'
+              ? 'border border-amber bg-amber-bg text-amber'
               : 'border border-amber bg-amber-bg text-amber hover:bg-amber hover:text-[#fdf8f0]'
           }`}
         >
-          {profileUser.isFollowing ? 'Following' : '+ Follow'}
+          {btnLabel}
         </button>
       </div>
     );

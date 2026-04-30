@@ -86,8 +86,9 @@ Copy `frontend/.env.example`. Key variable:
 ### Backend (`backend/src/`)
 Standard Express MVC layout:
 - **`routes/`** — thin route files that apply rate limiting and wire controllers; includes `health.js` (liveness/readiness) and `cache.js` (admin cache-flush, requires `ADMIN_API_KEY`)
-- **`controllers/`** — business logic; one file per domain (auth, coins, collections, users, messages, sessions, contact)
-- **`models/`** — Mongoose schemas (Coin, Collection, User, Session, Message, Conversation, Follow, Chat, Contact, CoinCustomImage)
+- **`controllers/`** — business logic; one file per domain (auth, coins, collections, users, messages, sessions, contact, notifications)
+- **`models/`** — Mongoose schemas (Coin, Collection, User, Session, Message, Conversation, Follow, Notification, Chat, Contact, CoinCustomImage)
+- **`utils/sseEmitter.js`** — singleton `EventEmitter` (max 1000 listeners) used by the notification SSE stream; keyed on `user:<userId>`
 - **`middlewares/`** — security (helmet/rate-limit), auth (JWT), CSRF, upload (multer/sharp), request ID, timeout, logging, error handler, `adminMiddleware.js` (API-key guard for admin routes), `enhancedValidation.js`
 - **`utils/cache.js`** — Redis-backed cache with automatic in-memory fallback; used via `cacheHelpers` (coins, collections, users, search, filters) and `cacheMiddleware` for HTTP routes
 - **`utils/metrics.js`** — Prometheus metrics via `prom-client`; exposed at `GET /metrics` (scrape endpoint)
@@ -100,6 +101,10 @@ Standard Express MVC layout:
 **CSRF**: Double-submit cookie pattern via `csrf-csrf`. Clients fetch a token from `GET /api/csrf-token` and send it in the `X-CSRF-Token` header on mutating requests. The backend auto-skips CSRF for requests with no auth cookie (non-browser clients).
 
 **Rate limiting**: Four limiters defined in `constants.js` — `generalLimiter` (100 req/15 min), `authLimiter` (20 req/15 min), `contactLimiter` (5 req/hr), `searchLimiter` (30 req/min). All use a Redis store when available, falling back to in-memory (fail-open if Redis goes down mid-flight).
+
+**Social / notifications**: The `Notification` model stores `follow_request`, `follow_accepted`, `new_follower`, and `new_message` events. `createNotification` (exported from `notificationController`) is the shared helper used by all domains that need to emit notifications — it also calls `pushCountsToUser` to push real-time counts via SSE. The SSE stream is single-instance (no Redis pub/sub); one connection per user is enforced via `activeConnections` Map. The Navbar holds the sole SSE connection per browser tab and fans out via `BroadcastChannel('numisroma:notifications')`.
+
+**Private profiles**: `User.isPrivate` (default `false`). Following a private user creates a `Follow` with `status: 'pending'`. Accept/decline routes update the status and clean up the notification. Both `GET /api/messages/conversations/:id` and `GET /api/users/:id/chat` gate messaging behind an accepted follow check when the target is private.
 
 **Coin schema**: `description.startYear` / `description.endYear` are numeric indexed fields derived from the human-readable `date_range` string via a pre-save hook — these power efficient year-range queries. BC years are stored as negative numbers.
 

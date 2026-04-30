@@ -8,26 +8,19 @@ const mongoose = require('mongoose');
 const Collection = require('../models/Collection');
 const Conversation = require('../models/Conversation');
 const logger = require('../utils/logger');
+const { createNotification, pushCountsToUser } = require('../controllers/notificationController');
+const Notification = require('../models/Notification');
 
-/**
- * Escape special regex characters to prevent ReDoS attacks
- */
 const escapeRegex = (str) => {
   if (!str || typeof str !== 'string') return '';
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
 
-// Per-request safety caps.
 const USER_SEARCH_MAX_LENGTH = 100;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
 
-// GET /api/users - Search users.
-// - Only exposes a narrow public projection; never returns `email`, since
-//   that would be an information-disclosure issue for any authenticated caller.
-// - Paginated to bound response size.
-// - Follow status resolved with a single query (avoids an N+1 lookup).
-// - User-supplied search is escaped and length-capped to avoid ReDoS.
+// GET /api/users
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { search } = req.query;
@@ -50,32 +43,31 @@ router.get('/', authMiddleware, async (req, res) => {
     let query = { _id: { $ne: currentUserId } };
     if (search) {
       const escapedSearch = escapeRegex(search);
-      // Match on username only. Email matching would expose private data
-      // to any authenticated caller — that is an information disclosure bug.
       query.username = { $regex: escapedSearch, $options: 'i' };
     }
 
     const users = await User.find(query)
-      .select('username avatar bio fullName createdAt')
+      .select('username avatar bio fullName createdAt isPrivate')
       .sort({ username: 1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    let followingSet = new Set();
+    let followMap = {};
     if (users.length > 0) {
-      // One query instead of N — resolves "am I following X, Y, Z?" in
-      // constant DB round-trips.
       const follows = await Follow.find({
         follower: currentUserId,
         following: { $in: users.map(u => u._id) }
-      }).select('following').lean();
-      followingSet = new Set(follows.map(f => f.following.toString()));
+      }).select('following status').lean();
+      for (const f of follows) {
+        followMap[f.following.toString()] = f.status;
+      }
     }
 
     const usersWithFollowStatus = users.map(user => ({
       ...user,
-      isFollowing: followingSet.has(user._id.toString())
+      isFollowing: followMap[user._id.toString()] === 'accepted',
+      followStatus: followMap[user._id.toString()] || 'none'
     }));
 
     const total = await User.countDocuments(query);
@@ -96,65 +88,45 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/users/recommended - Get recommended users
+// GET /api/users/recommended
 router.get('/recommended', authMiddleware, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
-    
-    // Find IDs of users that the current user already follows
-    const following = await Follow.find({ follower: currentUserId })
+
+    const following = await Follow.find({ follower: currentUserId, status: 'accepted' })
       .select('following')
       .lean();
     const followingIds = following.map(f => f.following);
-    
-    // Find users that:
-    // 1. The current user doesn't follow yet
-    // 2. Are not the current user
-    // 3. Have more followers (more popular)
-    // 4. Have been recently active
+
     const users = await User.aggregate([
       {
         $match: {
-          _id: { 
+          _id: {
             $ne: new mongoose.Types.ObjectId(currentUserId),
-            $nin: followingIds 
+            $nin: followingIds
           }
         }
       },
       {
         $lookup: {
           from: 'follows',
-          localField: '_id',
-          foreignField: 'following',
+          let: { uid: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: [{ $eq: ['$following', '$$uid'] }, { $eq: ['$status', 'accepted'] }] } } }
+          ],
           as: 'followers'
         }
       },
-      {
-        $addFields: {
-          followersCount: { $size: '$followers' }
-        }
-      },
-      {
-        $sort: {
-          followersCount: -1,
-          lastActive: -1
-        }
-      },
-      {
-        $limit: 3
-      },
-      {
-        $project: {
-          password: 0,
-          followers: 0
-        }
-      }
+      { $addFields: { followersCount: { $size: '$followers' } } },
+      { $sort: { followersCount: -1, lastActive: -1 } },
+      { $limit: 3 },
+      { $project: { password: 0, followers: 0 } }
     ]);
 
-    // Add isFollowing (will always be false for recommended users)
     const usersWithFollowStatus = users.map(user => ({
       ...user,
-      isFollowing: false
+      isFollowing: false,
+      followStatus: 'none'
     }));
 
     res.json(usersWithFollowStatus);
@@ -164,9 +136,7 @@ router.get('/recommended', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/users/:id/follow - Follow a user.
-// Race-safe: uses an upsert via the unique (follower, following) index so
-// two concurrent follow requests can never create duplicates.
+// POST /api/users/:id/follow
 router.post('/:id/follow', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -176,51 +146,72 @@ router.post('/:id/follow', validateObjectId('id'), authMiddleware, async (req, r
       return res.status(400).json({ message: 'You cannot follow yourself' });
     }
 
-    const userToFollow = await User.findById(id).select('_id').lean();
+    const userToFollow = await User.findById(id).select('_id isPrivate').lean();
     if (!userToFollow) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const result = await Follow.updateOne(
-      { follower: currentUserId, following: id },
-      { $setOnInsert: { follower: currentUserId, following: id } },
-      { upsert: true }
-    );
-
-    if (result.upsertedCount === 0) {
-      return res.status(200).json({ message: 'You are already following this user' });
+    // Check if a follow doc already exists (any status).
+    const existing = await Follow.findOne({ follower: currentUserId, following: id }).lean();
+    if (existing) {
+      return res.status(200).json({
+        message: existing.status === 'pending' ? 'Follow request already sent' : 'You are already following this user',
+        followStatus: existing.status
+      });
     }
 
-    res.status(201).json({ message: 'Successfully followed user' });
+    const status = userToFollow.isPrivate ? 'pending' : 'accepted';
+    await Follow.create({ follower: currentUserId, following: id, status });
+
+    if (status === 'pending') {
+      await createNotification({
+        recipient: id,
+        sender: currentUserId,
+        type: 'follow_request',
+        relatedUser: currentUserId
+      });
+      return res.status(201).json({ message: 'Follow request sent', followStatus: 'pending' });
+    }
+
+    await createNotification({
+      recipient: id,
+      sender: currentUserId,
+      type: 'new_follower',
+      relatedUser: currentUserId
+    });
+    res.status(201).json({ message: 'Successfully followed user', followStatus: 'accepted' });
   } catch (error) {
-    // E11000 from a racing upsert — treat as idempotent.
     if (error && error.code === 11000) {
-      return res.status(200).json({ message: 'You are already following this user' });
+      return res.status(200).json({ message: 'You are already following this user', followStatus: 'accepted' });
     }
     logger.error('Error following user', { error: error.message });
     res.status(500).json({ message: 'Error following user' });
   }
 });
 
-// DELETE /api/users/:id/unfollow - Unfollow a user
+// DELETE /api/users/:id/unfollow
 router.delete('/:id/unfollow', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     const currentUserId = req.user.userId;
 
-    const userToUnfollow = await User.findById(id);
+    const userToUnfollow = await User.findById(id).select('_id').lean();
     if (!userToUnfollow) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const result = await Follow.deleteOne({
-      follower: currentUserId,
-      following: id
-    });
+    const result = await Follow.deleteOne({ follower: currentUserId, following: id });
 
     if (result.deletedCount === 0) {
       return res.status(400).json({ message: 'You are not following this user' });
     }
+
+    // Remove the new_follower / follow_request notification that triggered this follow.
+    await Notification.deleteOne({
+      sender: currentUserId,
+      recipient: id,
+      type: { $in: ['new_follower', 'follow_request'] }
+    });
 
     res.json({ message: 'Successfully unfollowed user' });
   } catch (error) {
@@ -229,7 +220,112 @@ router.delete('/:id/unfollow', validateObjectId('id'), authMiddleware, async (re
   }
 });
 
-// GET /api/users/:id/profile - Get user public profile
+// POST /api/users/:id/follow-request/accept
+router.post('/:id/follow-request/accept', validateObjectId('id'), authMiddleware, async (req, res) => {
+  try {
+    const requesterId = req.params.id;
+    const currentUserId = req.user.userId;
+
+    const follow = await Follow.findOneAndUpdate(
+      { follower: requesterId, following: currentUserId, status: 'pending' },
+      { status: 'accepted' },
+      { new: true }
+    );
+
+    if (!follow) {
+      return res.status(404).json({ message: 'Follow request not found' });
+    }
+
+    // Delete the follow_request notification — it's been actioned.
+    await Notification.deleteOne({ sender: requesterId, recipient: currentUserId, type: 'follow_request' });
+
+    // Notify the requester their request was accepted.
+    await createNotification({
+      recipient: requesterId,
+      sender: currentUserId,
+      type: 'follow_accepted',
+      relatedUser: currentUserId
+    });
+
+    pushCountsToUser(currentUserId).catch(() => {});
+
+    res.json({ message: 'Follow request accepted' });
+  } catch (error) {
+    logger.error('Error accepting follow request', { error: error.message });
+    res.status(500).json({ message: 'Error accepting follow request' });
+  }
+});
+
+// POST /api/users/:id/follow-request/decline
+router.post('/:id/follow-request/decline', validateObjectId('id'), authMiddleware, async (req, res) => {
+  try {
+    const requesterId = req.params.id;
+    const currentUserId = req.user.userId;
+
+    const result = await Follow.deleteOne({
+      follower: requesterId,
+      following: currentUserId,
+      status: 'pending'
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: 'Follow request not found' });
+    }
+
+    // Delete the follow_request notification — it's been actioned.
+    await Notification.deleteOne({ sender: requesterId, recipient: currentUserId, type: 'follow_request' });
+
+    pushCountsToUser(currentUserId).catch(() => {});
+
+    res.json({ message: 'Follow request declined' });
+  } catch (error) {
+    logger.error('Error declining follow request', { error: error.message });
+    res.status(500).json({ message: 'Error declining follow request' });
+  }
+});
+
+// GET /api/users/:id/follow-requests — list pending requests for the authenticated user
+router.get('/:id/follow-requests', validateObjectId('id'), authMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentUserId = req.user.userId;
+
+    if (id !== currentUserId) {
+      return res.status(403).json({ message: 'You can only view your own follow requests' });
+    }
+
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit, 10) || DEFAULT_PAGE_SIZE, 1),
+      MAX_PAGE_SIZE
+    );
+    const skip = (page - 1) * limit;
+
+    const [requests, total] = await Promise.all([
+      Follow.find({ following: currentUserId, status: 'pending' })
+        .populate('follower', 'username avatar bio')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Follow.countDocuments({ following: currentUserId, status: 'pending' })
+    ]);
+
+    res.json({
+      requests: requests.map(r => r.follower),
+      pagination: {
+        page, limit, total,
+        pages: Math.ceil(total / limit),
+        hasMore: skip + requests.length < total
+      }
+    });
+  } catch (error) {
+    logger.error('Error getting follow requests', { error: error.message });
+    res.status(500).json({ message: 'Error retrieving follow requests' });
+  }
+});
+
+// GET /api/users/:id/profile
 router.get('/:id/profile', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -240,21 +336,32 @@ router.get('/:id/profile', validateObjectId('id'), authMiddleware, async (req, r
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Count followers
-    const followersCount = await Follow.countDocuments({ following: id });
-    // Count following
-    const followingCount = await Follow.countDocuments({ follower: id });
-    // Count coins
-    const coinsCount = await Collection.aggregate([
-      { $match: { user: user._id } },
-      { $unwind: '$coins' },
-      { $count: 'total' }
+    const [followersCount, followingCount, coinsCount] = await Promise.all([
+      Follow.countDocuments({ following: id, status: 'accepted' }),
+      Follow.countDocuments({ follower: id, status: 'accepted' }),
+      Collection.aggregate([
+        { $match: { user: user._id } },
+        { $unwind: '$coins' },
+        { $count: 'total' }
+      ])
     ]);
-    
-    // Check if the authenticated user follows this profile
-    let isFollowing = false;
+
+    let followStatus = 'none';
     if (currentUserId && currentUserId !== id) {
-      isFollowing = await Follow.exists({ follower: currentUserId, following: id });
+      const follow = await Follow.findOne({ follower: currentUserId, following: id }).lean();
+      if (follow) followStatus = follow.status;
+    }
+
+    // Pending follow requests for own profile
+    let pendingFollowRequestsCount = 0;
+    if (currentUserId === id) {
+      pendingFollowRequestsCount = await Follow.countDocuments({ following: id, status: 'pending' });
+    }
+
+    // Whether the profile owner has sent a pending follow request TO the current viewer
+    let hasPendingRequestFromThem = false;
+    if (currentUserId && currentUserId !== id) {
+      hasPendingRequestFromThem = !!(await Follow.exists({ follower: id, following: currentUserId, status: 'pending' }));
     }
 
     res.json({
@@ -263,10 +370,14 @@ router.get('/:id/profile', validateObjectId('id'), authMiddleware, async (req, r
       avatar: user.avatar || null,
       bio: user.bio || '',
       createdAt: user.createdAt,
+      isPrivate: user.isPrivate,
       followersCount,
       followingCount,
       coinsCount: coinsCount[0]?.total || 0,
-      isFollowing: !!isFollowing
+      isFollowing: followStatus === 'accepted',
+      followStatus,
+      pendingFollowRequestsCount,
+      hasPendingRequestFromThem
     });
   } catch (error) {
     logger.error('Error retrieving user profile', { error: error.message });
@@ -274,7 +385,7 @@ router.get('/:id/profile', validateObjectId('id'), authMiddleware, async (req, r
   }
 });
 
-// GET /api/users/:id/followers - Paginated followers list.
+// GET /api/users/:id/followers — only accepted follows
 router.get('/:id/followers', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const userId = req.params.id;
@@ -286,21 +397,19 @@ router.get('/:id/followers', validateObjectId('id'), authMiddleware, async (req,
     const skip = (page - 1) * limit;
 
     const [follows, total] = await Promise.all([
-      Follow.find({ following: userId })
+      Follow.find({ following: userId, status: 'accepted' })
         .populate('follower', 'username avatar bio')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      Follow.countDocuments({ following: userId })
+      Follow.countDocuments({ following: userId, status: 'accepted' })
     ]);
 
     res.json({
       users: follows.map(f => f.follower),
       pagination: {
-        page,
-        limit,
-        total,
+        page, limit, total,
         pages: Math.ceil(total / limit),
         hasMore: skip + follows.length < total
       }
@@ -311,7 +420,7 @@ router.get('/:id/followers', validateObjectId('id'), authMiddleware, async (req,
   }
 });
 
-// GET /api/users/:id/following - Paginated following list.
+// GET /api/users/:id/following — only accepted follows
 router.get('/:id/following', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const userId = req.params.id;
@@ -323,21 +432,19 @@ router.get('/:id/following', validateObjectId('id'), authMiddleware, async (req,
     const skip = (page - 1) * limit;
 
     const [follows, total] = await Promise.all([
-      Follow.find({ follower: userId })
+      Follow.find({ follower: userId, status: 'accepted' })
         .populate('following', 'username avatar bio')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      Follow.countDocuments({ follower: userId })
+      Follow.countDocuments({ follower: userId, status: 'accepted' })
     ]);
 
     res.json({
       users: follows.map(f => f.following),
       pagination: {
-        page,
-        limit,
-        total,
+        page, limit, total,
         pages: Math.ceil(total / limit),
         hasMore: skip + follows.length < total
       }
@@ -348,12 +455,12 @@ router.get('/:id/following', validateObjectId('id'), authMiddleware, async (req,
   }
 });
 
-// GET /api/users/:id/activity - Get recent user activities
+// GET /api/users/:id/activity
 router.get('/:id/activity', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const userId = req.params.id;
-    
-    const recentFollowers = await Follow.find({ following: userId })
+
+    const recentFollowers = await Follow.find({ following: userId, status: 'accepted' })
       .populate('follower', 'username avatar')
       .sort({ createdAt: -1 })
       .limit(10);
@@ -367,21 +474,29 @@ router.get('/:id/activity', validateObjectId('id'), authMiddleware, async (req, 
     res.json(activities);
   } catch (error) {
     logger.error('Error getting user activity', { error: error.message });
-    res.status(500).json({ 
-      message: 'Error retrieving user activity'
-    });
+    res.status(500).json({ message: 'Error retrieving user activity' });
   }
 });
 
-// GET /api/users/:id/chat - Create or get a chat with a user
+// GET /api/users/:id/chat
 router.get('/:id/chat', validateObjectId('id'), authMiddleware, async (req, res) => {
   try {
     const currentUserId = req.user.userId;
     const otherUserId = req.params.id;
 
-    const otherUser = await User.findById(otherUserId).select('username avatar');
+    const otherUser = await User.findById(otherUserId).select('username avatar isPrivate');
     if (!otherUser) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (otherUser.isPrivate) {
+      const isFollowing = await Follow.exists({ follower: currentUserId, following: otherUserId, status: 'accepted' });
+      if (!isFollowing) {
+        return res.status(403).json({
+          message: 'This account is private. Follow them to send a message.',
+          code: 'PRIVATE_PROFILE'
+        });
+      }
     }
 
     let conversation = await Conversation.findOne({
@@ -395,16 +510,43 @@ router.get('/:id/chat', validateObjectId('id'), authMiddleware, async (req, res)
       });
     }
 
-    res.json({
-      conversationId: conversation._id,
-      user: otherUser
-    });
+    res.json({ conversationId: conversation._id, user: otherUser });
   } catch (error) {
     logger.error('Error creating/getting chat', { error: error.message });
-    res.status(500).json({ 
-      message: 'Error creating chat'
-    });
+    res.status(500).json({ message: 'Error creating chat' });
   }
 });
 
-module.exports = router; 
+// PUT /api/users/me/privacy
+router.put('/me/privacy', authMiddleware, async (req, res) => {
+  try {
+    const currentUserId = req.user.userId;
+    const { isPrivate } = req.body;
+
+    if (typeof isPrivate !== 'boolean') {
+      return res.status(400).json({ message: 'isPrivate must be a boolean' });
+    }
+
+    const user = await User.findById(currentUserId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const wasPrivate = user.isPrivate;
+    user.isPrivate = isPrivate;
+    await user.save();
+
+    // If switching private → public: auto-accept all pending follow requests.
+    if (wasPrivate && !isPrivate) {
+      await Follow.updateMany(
+        { following: currentUserId, status: 'pending' },
+        { status: 'accepted' }
+      );
+    }
+
+    res.json({ isPrivate: user.isPrivate });
+  } catch (error) {
+    logger.error('Error updating privacy setting', { error: error.message });
+    res.status(500).json({ message: 'Error updating privacy setting' });
+  }
+});
+
+module.exports = router;

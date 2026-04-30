@@ -1,6 +1,7 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { AuthContext } from '../../context/AuthContext';
 import { semantic } from '../../utils/tokens';
+import { apiClient } from '../../utils/apiClient';
 
 const formatLastActive = (date) => {
   try {
@@ -43,12 +44,29 @@ const Toggle = ({ checked }) => (
 );
 
 const PrivacyPanel = ({ onSuccess }) => {
-  const { sessions, sessionsLoading, fetchSessions, terminateSession, terminateAllOtherSessions, setSessions } = useContext(AuthContext);
+  const { user, sessions, sessionsLoading, fetchSessions, terminateSession, terminateAllOtherSessions, setSessions } = useContext(AuthContext);
   const [terminatingSession, setTerminatingSession] = useState(null);
   const [terminatingAllSessions, setTerminatingAllSessions] = useState(false);
   const [sessionError, setSessionError] = useState(null);
+  const [isPrivate, setIsPrivate] = useState(user?.isPrivate ?? false);
+  const [privacyLoading, setPrivacyLoading] = useState(false);
 
   useEffect(() => { fetchSessions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handlePrivacyToggle = async () => {
+    const next = !isPrivate;
+    setPrivacyLoading(true);
+    try {
+      await apiClient.put('/api/users/me/privacy', { isPrivate: next });
+      setIsPrivate(next);
+      onSuccess(next ? 'Account set to private.' : 'Account set to public. All pending follow requests accepted.');
+    } catch {
+      setSessionError('Error updating privacy setting');
+      setTimeout(() => setSessionError(null), 3000);
+    } finally {
+      setPrivacyLoading(false);
+    }
+  };
 
   const showError = (msg) => { setSessionError(msg); setTimeout(() => setSessionError(null), 3000); };
 
@@ -79,6 +97,39 @@ const PrivacyPanel = ({ onSuccess }) => {
   return (
     <div className="space-y-8">
       <h2 className="font-display font-semibold text-2xl text-text-primary">Privacy &amp; Security</h2>
+
+      {/* Private Account Toggle */}
+      <div className="p-5 bg-surface-alt border border-border rounded-lg">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-md bg-amber-bg">
+              <svg className="w-4 h-4 text-amber" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="font-sans font-semibold text-sm text-text-primary">Private Account</h3>
+              <p className="font-sans text-xs text-text-muted mt-0.5">
+                {isPrivate
+                  ? 'Only approved followers can see your collection.'
+                  : 'Anyone can follow you and see your collection.'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handlePrivacyToggle}
+            disabled={privacyLoading}
+            className="relative inline-flex items-center h-6 rounded-full w-11 shrink-0 transition-colors duration-200 disabled:opacity-50"
+            style={{ backgroundColor: isPrivate ? 'var(--color-amber)' : 'var(--color-border)' }}
+            aria-label="Toggle private account"
+          >
+            <span
+              className="inline-block w-4 h-4 rounded-full bg-white shadow transition-transform duration-200"
+              style={{ transform: isPrivate ? 'translateX(26px)' : 'translateX(4px)' }}
+            />
+          </button>
+        </div>
+      </div>
 
       {/* 2FA & Login Notifications */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

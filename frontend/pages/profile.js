@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useContext } from 'react';
+import React, { useEffect, useState, useContext, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import Link from 'next/link';
@@ -34,6 +34,7 @@ const ProfilePage = () => {
   const [loadingFollowing, setLoadingFollowing] = useState(false);
   const [activities, setActivities] = useState([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
+  const [actingOnIncomingRequest, setActingOnIncomingRequest] = useState(false);
 
   useEffect(() => {
     document.body.style.overflow = (showFollowersModal || showFollowingModal) ? 'hidden' : 'unset';
@@ -60,6 +61,13 @@ const ProfilePage = () => {
     setTimeout(() => setNotification({ show: false, message: '', type: '' }), 3000);
   }, [router.query, router]);
 
+  const refreshProfile = useCallback(() => {
+    if (!id) return;
+    apiClient.get(`/api/users/${id}/profile`)
+      .then(data => setProfile(p => ({ ...p, ...data })))
+      .catch(() => {});
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     setLoading(true);
@@ -80,6 +88,17 @@ const ProfilePage = () => {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // Silently refresh profile data whenever the Navbar SSE pushes an update.
+  useEffect(() => {
+    if (!user) return;
+    let bc;
+    try {
+      bc = new BroadcastChannel('numisroma:notifications');
+      bc.onmessage = refreshProfile;
+    } catch {}
+    return () => { try { bc?.close(); } catch {} };
+  }, [user, refreshProfile]);
+
   useEffect(() => {
     if (!id) return;
     apiClient.get(`/api/collections/user/${id}`)
@@ -89,17 +108,25 @@ const ProfilePage = () => {
 
   useEffect(() => {
     if (!id || !profile) return;
+    const isOwn = user && (user._id === profile._id || String(user._id) === String(profile._id));
     setLoadingActivities(true);
-    apiClient.get(`/api/users/${id}/activity`)
-      .then(data => {
-        const collectionActivities = collections.map(c => ({
-          type: 'collection_created', user: profile, collection: c, createdAt: c.createdAt,
-        }));
-        setActivities([...data, ...collectionActivities].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
-      })
-      .catch(() => setActivities([]))
-      .finally(() => setLoadingActivities(false));
-  }, [id, collections, profile]);
+    const collectionActivities = collections.map(c => ({
+      type: 'collection_created', user: profile, collection: c, createdAt: c.createdAt,
+    }));
+    if (isOwn) {
+      // Own profile: show both recent followers and collection events.
+      apiClient.get(`/api/users/${id}/activity`)
+        .then(data => {
+          setActivities([...data, ...collectionActivities].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+        })
+        .catch(() => setActivities(collectionActivities))
+        .finally(() => setLoadingActivities(false));
+    } else {
+      // Other profiles: only show their collection events — no follower data.
+      setActivities(collectionActivities.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+      setLoadingActivities(false);
+    }
+  }, [id, collections, profile, user]);
 
   const notify = (message, type = 'success') => {
     setNotification({ show: true, message, type });
@@ -143,15 +170,31 @@ const ProfilePage = () => {
     if (!user) { router.push('/login'); return; }
     setFollowLoading(true);
     try {
-      if (profile.isFollowing) {
+      const currentStatus = profile.followStatus ?? (profile.isFollowing ? 'accepted' : 'none');
+
+      if (currentStatus === 'accepted') {
         await apiClient.delete(`/api/users/${id}/unfollow`);
-        setActivities(prev => prev.filter(a => a.user._id !== user._id));
+        setProfile(p => ({ ...p, isFollowing: false, followStatus: 'none', followersCount: Math.max(0, (p.followersCount || 0) - 1) }));
+        notify('You have stopped following this user');
+      } else if (currentStatus === 'pending') {
+        await apiClient.delete(`/api/users/${id}/unfollow`);
+        setProfile(p => ({ ...p, followStatus: 'none', isFollowing: false }));
+        notify('Follow request cancelled');
       } else {
-        await apiClient.post(`/api/users/${id}/follow`);
-        setActivities(prev => [{ type: 'follow', user: { _id: user._id, username: user.username, avatar: user.avatar }, createdAt: new Date().toISOString() }, ...prev]);
+        const data = await apiClient.post(`/api/users/${id}/follow`);
+        const newStatus = data.followStatus ?? 'accepted';
+        setProfile(p => ({
+          ...p,
+          isFollowing: newStatus === 'accepted',
+          followStatus: newStatus,
+          followersCount: newStatus === 'accepted' ? (p.followersCount || 0) + 1 : p.followersCount
+        }));
+        if (newStatus === 'pending') {
+          notify('Follow request sent');
+        } else {
+          notify('You are now following this user');
+        }
       }
-      setProfile(p => ({ ...p, isFollowing: !p.isFollowing }));
-      notify(profile.isFollowing ? 'You have stopped following this user' : 'You have started following this user');
     } catch {
       notify('Error. Please try again.', 'error');
     } finally {
@@ -175,6 +218,33 @@ const ProfilePage = () => {
   };
 
   const cancelBioEdit = () => { setBioText(profile.bio || ''); setIsEditingBio(false); };
+
+  const handleAcceptIncoming = async () => {
+    setActingOnIncomingRequest(true);
+    try {
+      await apiClient.post(`/api/users/${id}/follow-request/accept`);
+      // Refresh full profile so followersCount, followStatus all update at once.
+      refreshProfile();
+      notify(`You accepted ${profile.username}'s follow request`);
+    } catch {
+      notify('Error accepting request. Please try again.', 'error');
+    } finally {
+      setActingOnIncomingRequest(false);
+    }
+  };
+
+  const handleDeclineIncoming = async () => {
+    setActingOnIncomingRequest(true);
+    try {
+      await apiClient.post(`/api/users/${id}/follow-request/decline`);
+      setProfile(p => ({ ...p, hasPendingRequestFromThem: false }));
+      notify('Follow request declined');
+    } catch {
+      notify('Error declining request. Please try again.', 'error');
+    } finally {
+      setActingOnIncomingRequest(false);
+    }
+  };
 
   if (loading || authLoading) {
     return (
@@ -216,7 +286,10 @@ const ProfilePage = () => {
     );
   }
 
-  const isOwnProfile = user._id === profile._id;
+  const isOwnProfile = user._id === profile._id || String(user._id) === String(profile._id);
+  const followStatus = profile.followStatus ?? (profile.isFollowing ? 'accepted' : 'none');
+  const isAcceptedFollower = isOwnProfile || followStatus === 'accepted';
+  const isPrivateGated = profile.isPrivate && !isAcceptedFollower;
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -247,8 +320,9 @@ const ProfilePage = () => {
       <div className="max-w-5xl mx-auto px-3 sm:px-4 relative">
         <ProfileHeader
           profile={profile}
-          collectionsCount={collections.length}
+          collectionsCount={isPrivateGated ? 0 : collections.length}
           isOwnProfile={isOwnProfile}
+          isPrivateGated={isPrivateGated}
           user={user}
           followLoading={followLoading}
           chatLoading={chatLoading}
@@ -267,11 +341,51 @@ const ProfilePage = () => {
           onShowFollowing={() => { setShowFollowingModal(true); loadFollowing(); }}
         />
 
-        {activeTab === 'collections' && (
-          <CollectionsTab collections={collections} profile={profile} isOwnProfile={isOwnProfile} />
+        {/* Incoming follow-request banner */}
+        {!isOwnProfile && profile.hasPendingRequestFromThem && (
+          <div className="mt-4 flex items-center justify-between gap-4 px-5 py-4 bg-card border border-amber rounded-lg">
+            <p className="font-sans text-sm text-text-primary">
+              <span className="font-semibold">{profile.username}</span> wants to follow you
+            </p>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={handleAcceptIncoming}
+                disabled={actingOnIncomingRequest}
+                className="px-4 py-1.5 font-sans text-sm font-semibold rounded-md bg-amber text-[#fdf8f0] hover:bg-amber-hover transition-colors duration-150 disabled:opacity-50"
+              >
+                {actingOnIncomingRequest ? 'Accepting…' : 'Accept'}
+              </button>
+              <button
+                onClick={handleDeclineIncoming}
+                disabled={actingOnIncomingRequest}
+                className="px-4 py-1.5 font-sans text-sm rounded-md border border-border bg-card text-text-secondary hover:bg-surface-alt transition-colors duration-150 disabled:opacity-50"
+              >
+                Decline
+              </button>
+            </div>
+          </div>
         )}
-        {activeTab === 'activity' && (
-          <ActivityTab activities={activities} loadingActivities={loadingActivities} user={user} profile={profile} />
+
+        {/* Private gate */}
+        {isPrivateGated ? (
+          <div className="mt-8 flex flex-col items-center justify-center py-20 text-center">
+            <div className="w-16 h-16 rounded-full flex items-center justify-center mb-5 bg-surface-alt">
+              <svg className="w-8 h-8 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <p className="font-display font-semibold text-xl mb-2 text-text-primary">This account is private</p>
+            <p className="font-sans text-sm text-text-muted">Follow {profile.username} to see their collection.</p>
+          </div>
+        ) : (
+          <>
+            {activeTab === 'collections' && (
+              <CollectionsTab collections={collections} profile={profile} isOwnProfile={isOwnProfile} />
+            )}
+            {activeTab === 'activity' && (
+              <ActivityTab activities={activities} loadingActivities={loadingActivities} user={user} profile={profile} />
+            )}
+          </>
         )}
       </div>
 

@@ -1,8 +1,43 @@
-import React, { useState, useContext, useEffect, useRef } from 'react';
+import React, { useState, useContext, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { AuthContext } from '../context/AuthContext';
 import Image from 'next/image';
+import { apiClient } from '../utils/apiClient';
+
+const POLL_INTERVAL_MS = 30000;
+
+// Format relative time for notification timestamps.
+const relativeTime = (dateStr) => {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
+};
+
+const notifText = (n) => {
+  const sender = n.sender?.username ?? 'Someone';
+  switch (n.type) {
+    case 'follow_request':    return `${sender} requested to follow you`;
+    case 'follow_accepted':   return `${sender} accepted your follow request`;
+    case 'new_follower':      return `${sender} started following you`;
+    case 'new_message':       return `${sender} sent you a message`;
+    default:                  return `${sender} sent a notification`;
+  }
+};
+
+const Badge = ({ count }) => {
+  if (!count) return null;
+  return (
+    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-red-500 text-white font-sans font-bold text-[10px] px-1 leading-none">
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+};
 
 const Navbar = () => {
   const { user, logout, isLoading } = useContext(AuthContext);
@@ -10,23 +45,121 @@ const Navbar = () => {
   const isAuthPage = router.pathname === '/login' || router.pathname === '/register';
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isBellOpen, setIsBellOpen] = useState(false);
   const timeoutRef = useRef(null);
+  const bellTimeoutRef = useRef(null);
+  const bellRef = useRef(null);
+
+  // Badge count for the bell icon.
+  const [notifCount, setNotifCount] = useState(0);
+
+  // Last 10 notifications for the dropdown.
+  const [notifications, setNotifications] = useState([]);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [actingOnRequest, setActingOnRequest] = useState(null);
+
+  const sseRef = useRef(null);
+  const pollTimerRef = useRef(null);
+
+  const fetchCounts = useCallback(async () => {
+    if (!user) return;
+    try {
+      const notifData = await apiClient.get('/api/notifications/unread-count');
+      setNotifCount(notifData.count ?? 0);
+    } catch {}
+  }, [user]);
+
+  const fetchNotifications = useCallback(async () => {
+    if (!user) return;
+    setNotifLoading(true);
+    try {
+      const data = await apiClient.get('/api/notifications?limit=10');
+      setNotifications(data.notifications ?? []);
+    } catch {}
+    finally { setNotifLoading(false); }
+  }, [user]);
+
+  // SSE connection with polling fallback.
+  useEffect(() => {
+    if (!user || isAuthPage) return;
+
+    let es;
+    let fallbackTimer;
+    let connected = false;
+
+    const startPolling = () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = setInterval(fetchCounts, POLL_INTERVAL_MS);
+    };
+
+    const connect = () => {
+      try {
+        es = new EventSource('/api/notifications/stream', { withCredentials: true });
+        sseRef.current = es;
+
+        es.onopen = () => {
+          connected = true;
+          if (pollTimerRef.current) { clearInterval(pollTimerRef.current); pollTimerRef.current = null; }
+        };
+
+        es.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (typeof data.notifications === 'number') setNotifCount(data.notifications);
+            // Broadcast to other components so they can refresh without their own SSE.
+            try {
+              new BroadcastChannel('numisroma:notifications').postMessage(data);
+            } catch {}
+          } catch {}
+        };
+
+        es.onerror = () => {
+          connected = false;
+          es.close();
+          startPolling();
+          // Retry SSE after 60s.
+          fallbackTimer = setTimeout(connect, 60000);
+        };
+      } catch {
+        startPolling();
+      }
+    };
+
+    fetchCounts();
+    connect();
+
+    return () => {
+      if (es) es.close();
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
+  }, [user, isAuthPage, fetchCounts]);
 
   useEffect(() => { setIsDropdownOpen(false); }, [user]);
-  useEffect(() => () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }, []);
+  useEffect(() => () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (bellTimeoutRef.current) clearTimeout(bellTimeoutRef.current);
+  }, []);
 
-  /* Close mobile menu on route change */
   useEffect(() => {
-    const close = () => setIsMobileMenuOpen(false);
+    const close = () => { setIsMobileMenuOpen(false); setIsBellOpen(false); };
     router.events.on('routeChangeStart', close);
     return () => router.events.off('routeChangeStart', close);
   }, [router.events]);
 
-  /* Prevent body scroll when drawer is open */
   useEffect(() => {
     document.body.style.overflow = isMobileMenuOpen ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
   }, [isMobileMenuOpen]);
+
+  // Close bell dropdown on outside click.
+  useEffect(() => {
+    const handler = (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target)) setIsBellOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   const getUserInitial = () => user?.username?.charAt(0).toUpperCase() ?? '';
 
@@ -39,9 +172,68 @@ const Navbar = () => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setIsDropdownOpen(true);
   };
-
   const handleMouseLeave = () => {
     timeoutRef.current = setTimeout(() => setIsDropdownOpen(false), 250);
+  };
+
+  const handleBellClick = () => {
+    if (!isBellOpen) {
+      fetchNotifications();
+      setIsBellOpen(true);
+    } else {
+      setIsBellOpen(false);
+    }
+  };
+
+  const markAllRead = async () => {
+    try {
+      await apiClient.put('/api/notifications/read-all');
+      setNotifCount(0);
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    } catch {}
+  };
+
+  const markNotifRead = async (n) => {
+    if (!n.isRead) {
+      try {
+        await apiClient.put(`/api/notifications/${n._id}/read`);
+        setNotifCount(c => Math.max(0, c - 1));
+        setNotifications(prev => prev.map(x => x._id === n._id ? { ...x, isRead: true } : x));
+      } catch {}
+    }
+  };
+
+  const handleNotifClick = async (n) => {
+    await markNotifRead(n);
+    setIsBellOpen(false);
+    if (n.type === 'new_message') {
+      router.push('/messages');
+    } else if (n.sender?._id) {
+      router.push(`/profile?id=${n.sender._id}`);
+    }
+  };
+
+  const handleAcceptRequest = async (e, n) => {
+    e.stopPropagation();
+    setActingOnRequest(n._id);
+    try {
+      await apiClient.post(`/api/users/${n.sender._id}/follow-request/accept`);
+      setNotifications(prev => prev.filter(x => x._id !== n._id));
+      // SSE will push the new count; also fetch immediately for fast feedback.
+      fetchCounts();
+    } catch {}
+    finally { setActingOnRequest(null); }
+  };
+
+  const handleDeclineRequest = async (e, n) => {
+    e.stopPropagation();
+    setActingOnRequest(n._id);
+    try {
+      await apiClient.post(`/api/users/${n.sender._id}/follow-request/decline`);
+      setNotifications(prev => prev.filter(x => x._id !== n._id));
+      fetchCounts();
+    } catch {}
+    finally { setActingOnRequest(null); }
   };
 
   const navLinks = [
@@ -89,54 +281,153 @@ const Navbar = () => {
           {isLoading ? (
             <div className="w-9 h-9 rounded-full animate-pulse bg-surface-alt" />
           ) : user && !isAuthPage ? (
-            <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-              <button className="flex items-center focus:outline-none">
-                {user.profileImage ? (
-                  <Image
-                    src={user.profileImage}
-                    alt="Profile"
-                    width={36}
-                    height={36}
-                    className="w-9 h-9 rounded-full object-cover border border-border hover:opacity-90 transition-opacity duration-200"
-                  />
-                ) : (
-                  <div className="w-9 h-9 rounded-full flex items-center justify-center font-sans font-semibold text-sm bg-amber text-[#fdf8f0]">
-                    {getUserInitial()}
+            <>
+              {/* Bell icon */}
+              <div className="relative" ref={bellRef}>
+                <button
+                  onClick={handleBellClick}
+                  aria-label="Notifications"
+                  className="relative w-9 h-9 flex items-center justify-center rounded-full text-text-secondary hover:text-text-primary hover:bg-surface-alt transition-colors duration-150"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  <Badge count={notifCount} />
+                </button>
+
+                {/* Notification dropdown */}
+                {isBellOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-80 rounded-md z-50 animate-fade-in bg-card border border-border shadow-md overflow-hidden">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                      <p className="font-sans font-semibold text-sm text-text-primary">Notifications</p>
+                      {notifCount > 0 && (
+                        <button
+                          onClick={markAllRead}
+                          className="font-sans text-xs text-amber hover:text-amber-hover transition-colors duration-150"
+                        >
+                          Mark all as read
+                        </button>
+                      )}
+                    </div>
+
+                    {/* List */}
+                    <div className="max-h-80 overflow-y-auto divide-y divide-border">
+                      {notifLoading ? (
+                        <div className="flex justify-center py-8">
+                          <div className="animate-spin rounded-full h-5 w-5 border-2 border-amber border-t-transparent" />
+                        </div>
+                      ) : notifications.length === 0 ? (
+                        <p className="font-sans text-sm text-text-muted text-center py-8">No notifications yet</p>
+                      ) : (
+                        notifications.map(n => (
+                          <div
+                            key={n._id}
+                            className={`flex items-start gap-3 px-4 py-3 ${!n.isRead ? 'border-l-2 border-amber' : ''} ${n.type !== 'follow_request' ? 'cursor-pointer hover:bg-surface-alt transition-colors duration-150' : 'bg-surface-alt/40'}`}
+                            onClick={n.type !== 'follow_request' ? () => handleNotifClick(n) : undefined}
+                          >
+                            {/* Sender avatar */}
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-amber-bg overflow-hidden">
+                              {n.sender?.avatar ? (
+                                <Image src={n.sender.avatar} alt={n.sender.username} width={32} height={32} className="rounded-full object-cover" />
+                              ) : (
+                                <span className="font-sans font-semibold text-xs text-amber">
+                                  {n.sender?.username?.charAt(0).toUpperCase()}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-sans text-xs text-text-primary leading-relaxed">{notifText(n)}</p>
+                              <p className="font-sans text-[10px] text-text-muted mt-0.5">{relativeTime(n.createdAt)}</p>
+                              {n.type === 'follow_request' && (
+                                <div className="flex gap-1.5 mt-2">
+                                  <button
+                                    onClick={(e) => handleAcceptRequest(e, n)}
+                                    disabled={actingOnRequest === n._id}
+                                    className="px-3 py-1 font-sans text-xs font-semibold rounded bg-amber text-[#fdf8f0] hover:bg-amber-hover transition-colors duration-150 disabled:opacity-50"
+                                  >
+                                    Accept
+                                  </button>
+                                  <button
+                                    onClick={(e) => handleDeclineRequest(e, n)}
+                                    disabled={actingOnRequest === n._id}
+                                    className="px-3 py-1 font-sans text-xs rounded border border-border bg-card text-text-secondary hover:bg-surface-alt transition-colors duration-150 disabled:opacity-50"
+                                  >
+                                    Decline
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {!n.isRead && n.type !== 'follow_request' && <span className="w-2 h-2 rounded-full bg-amber shrink-0 mt-1.5" />}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="border-t border-border">
+                      <Link
+                        href="/notifications"
+                        onClick={() => setIsBellOpen(false)}
+                        className="block text-center font-sans text-xs text-amber hover:text-amber-hover py-2.5 transition-colors duration-150"
+                      >
+                        See all notifications
+                      </Link>
+                    </div>
                   </div>
                 )}
-              </button>
+              </div>
 
-              {isDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-52 rounded-md py-1 z-50 animate-fade-in bg-card border border-border shadow-md">
-                  <div className="px-4 py-2.5 border-b border-border">
-                    <p className="font-sans text-sm font-medium truncate text-text-primary">{user.username}</p>
-                    <p className="font-sans text-xs truncate mt-0.5 text-text-muted">{user.email}</p>
+              {/* User dropdown */}
+              <div className="relative" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+                <button className="flex items-center focus:outline-none">
+                  {user.profileImage ? (
+                    <Image
+                      src={user.profileImage}
+                      alt="Profile"
+                      width={36}
+                      height={36}
+                      className="w-9 h-9 rounded-full object-cover border border-border hover:opacity-90 transition-opacity duration-200"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full flex items-center justify-center font-sans font-semibold text-sm bg-amber text-[#fdf8f0]">
+                      {getUserInitial()}
+                    </div>
+                  )}
+                </button>
+
+                {isDropdownOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-52 rounded-md py-1 z-50 animate-fade-in bg-card border border-border shadow-md">
+                    <div className="px-4 py-2.5 border-b border-border">
+                      <p className="font-sans text-sm font-medium truncate text-text-primary">{user.username}</p>
+                      <p className="font-sans text-xs truncate mt-0.5 text-text-muted">{user.email}</p>
+                    </div>
+                    {[
+                      { label: 'Profile',  href: `/profile?id=${user._id}` },
+                      { label: 'Messages', href: '/messages' },
+                      { label: 'Settings', href: '/settings' },
+                    ].map(({ label, href }) => (
+                      <Link
+                        key={label}
+                        href={href}
+                        onClick={() => setIsDropdownOpen(false)}
+                        className="flex items-center px-4 py-2 font-sans text-sm text-text-secondary hover:bg-surface-alt hover:text-text-primary transition-colors duration-150"
+                      >
+                        {label}
+                      </Link>
+                    ))}
+                    <div className="border-t border-border mt-1 pt-1">
+                      <button
+                        onClick={handleLogout}
+                        className="w-full text-left px-4 py-2 font-sans text-sm text-red-700 hover:bg-red-50 transition-colors duration-150"
+                      >
+                        Sign out
+                      </button>
+                    </div>
                   </div>
-                  {[
-                    { label: 'Profile',  href: `/profile?id=${user._id}` },
-                    { label: 'Messages', href: '/messages'  },
-                    { label: 'Settings', href: '/settings'  },
-                  ].map(({ label, href }) => (
-                    <Link
-                      key={label}
-                      href={href}
-                      onClick={() => setIsDropdownOpen(false)}
-                      className="block px-4 py-2 font-sans text-sm text-text-secondary hover:bg-surface-alt hover:text-text-primary transition-colors duration-150"
-                    >
-                      {label}
-                    </Link>
-                  ))}
-                  <div className="border-t border-border mt-1 pt-1">
-                    <button
-                      onClick={handleLogout}
-                      className="w-full text-left px-4 py-2 font-sans text-sm text-red-700 hover:bg-red-50 transition-colors duration-150"
-                    >
-                      Sign out
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            </>
           ) : (
             <>
               <Link
@@ -239,16 +530,22 @@ const Navbar = () => {
                 <p className="font-sans text-xs text-text-muted truncate">{user.email}</p>
               </div>
               {[
+                { label: 'Notifications', href: '/notifications', badge: notifCount },
                 { label: 'Profile',  href: `/profile?id=${user._id}` },
                 { label: 'Messages', href: '/messages' },
                 { label: 'Settings', href: '/settings' },
-              ].map(({ label, href }) => (
+              ].map(({ label, href, badge }) => (
                 <Link
                   key={label}
                   href={href}
-                  className="block px-4 py-2.5 rounded-md font-sans text-sm text-text-secondary hover:bg-surface-alt hover:text-text-primary transition-colors duration-150"
+                  className="flex items-center justify-between px-4 py-2.5 rounded-md font-sans text-sm text-text-secondary hover:bg-surface-alt hover:text-text-primary transition-colors duration-150"
                 >
                   {label}
+                  {badge > 0 && (
+                    <span className="min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-red-500 text-white font-sans font-bold text-[10px] px-1">
+                      {badge > 99 ? '99+' : badge}
+                    </span>
+                  )}
                 </Link>
               ))}
               <button
