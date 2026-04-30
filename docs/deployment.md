@@ -24,15 +24,34 @@ Fill in all required values. Production-specific variables:
 
 | Variable | Description |
 |----------|-------------|
-| `DOMAIN` | Your public hostname, e.g. `numisroma.example.com` |
-| `BACKUP_DIR` | Host path for MongoDB dump archives, e.g. `/srv/backups/numisroma` |
+| `DOMAIN` | Your public hostname, e.g. `numisroma.com` — frontend served at `https://$DOMAIN`, backend at `https://api.$DOMAIN` |
+| `BACKUP_DIR` | Host path for MongoDB dump archives, e.g. `./backups` |
 | `MONGO_INITDB_ROOT_USERNAME` | MongoDB root user (must match the backend connection string) |
 | `MONGO_INITDB_ROOT_PASSWORD` | MongoDB root password |
+| `JWT_SECRET` | ≥ 64-char random string |
+| `REFRESH_TOKEN_SECRET` | ≥ 64-char random string, different from `JWT_SECRET` |
+| `CSRF_SECRET` | ≥ 64-char random string, different from both above |
+
+Generate secrets with:
+```bash
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+```
+
+Optional image storage (Cloudflare R2 or AWS S3 — falls back to local disk):
+
+| Variable | Description |
+|----------|-------------|
+| `AWS_S3_BUCKET` | Bucket name |
+| `AWS_REGION` | Region (`auto` for Cloudflare R2) |
+| `AWS_ACCESS_KEY_ID` | Access key |
+| `AWS_SECRET_ACCESS_KEY` | Secret key |
+| `AWS_S3_CUSTOM_DOMAIN` | Public bucket domain (e.g. `pub-xxxx.r2.dev`) |
+| `AWS_ENDPOINT` | R2 only: `https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com` |
 
 ### 2. Start the stack
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 This brings up:
@@ -41,13 +60,14 @@ This brings up:
 |---------|------|
 | `frontend` | Next.js (internal only, no host port) |
 | `backend` | Express API (internal only, no host port) |
-| `mongodb` | MongoDB 7.0 with persistent volume |
-| `caddy` | Reverse proxy, ports 80/443/443-UDP (HTTP/3) |
+| `mongodb` | MongoDB 8.0 with persistent volume, port not exposed to host |
+| `redis` | Redis 7 with persistent volume |
+| `caddy` | Reverse proxy, ports 80 and 443 |
 | `mongo-backup` | Daily 02:00 UTC `mongodump` cron |
 
 ### 3. Verify TLS
 
-Caddy fetches a Let's Encrypt certificate automatically on first request to `https://$DOMAIN`. Check logs:
+Caddy fetches a Let's Encrypt certificate automatically on first request. Check logs:
 
 ```bash
 docker compose logs caddy -f
@@ -59,19 +79,20 @@ docker compose logs caddy -f
 
 Defined in `Caddyfile`:
 
-| Path pattern | Upstream |
-|-------------|----------|
-| `/api/*` | `backend:4000` |
-| `/uploads/*` | `backend:4000` |
-| `/health*` | `backend:4000` |
-| Everything else | `frontend:3000` |
+| Host | Upstream |
+|------|----------|
+| `numisroma.com` | `frontend:3000` |
+| `api.numisroma.com` | `backend:4000` |
 
-Security headers added by Caddy (in addition to Helmet in the backend):
-- `Strict-Transport-Security` with `preload`
-- `X-Content-Type-Options: nosniff`
-- `Referrer-Policy: strict-origin-when-cross-origin`
-- `Permissions-Policy` (camera, mic, geolocation disabled)
-- Server header removed
+The frontend and backend containers are not exposed on any host port — all external traffic goes through Caddy.
+
+---
+
+## Frontend build and NEXT_PUBLIC_API_URL
+
+`NEXT_PUBLIC_API_URL` is a **build-time** variable in Next.js — it gets baked into the JavaScript bundle at image build time. In production this is automatically set to `https://api.$DOMAIN` by `docker-compose.prod.yml`. You do not need to set it manually.
+
+For local development (`docker compose up` without the prod overlay), it defaults to `http://localhost:4000` via the `NEXT_PUBLIC_API_URL` variable in your root `.env`.
 
 ---
 
@@ -79,15 +100,15 @@ Security headers added by Caddy (in addition to Helmet in the backend):
 
 `docker-compose.prod.yml` runs `mongo-backup` which executes `scripts/backup-mongo.sh`:
 
-- Runs once on container start
-- Then runs daily at 02:00 UTC
-- Archives are stored at `$BACKUP_DIR` (default `./backups`)
+- Runs daily at 02:00 UTC
+- Archives are stored at `$BACKUP_DIR` on the host
+- Prunes archives older than 30 days automatically
 - Requires `MONGO_INITDB_ROOT_USERNAME` and `MONGO_INITDB_ROOT_PASSWORD`
 
 To trigger a manual backup:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec mongo-backup /backup-mongo.sh
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec mongo-backup /backup.sh
 ```
 
 ---
@@ -96,8 +117,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec mongo-backu
 
 ```bash
 git pull
-docker compose -f docker-compose.yml -f docker-compose.prod.yml build
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 ---

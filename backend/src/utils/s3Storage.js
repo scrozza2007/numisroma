@@ -11,6 +11,8 @@ const getClient = () => {
   if (!_client) {
     _client = new S3Client({
       region: process.env.AWS_REGION || 'us-east-1',
+      // AWS_ENDPOINT allows using S3-compatible providers like Cloudflare R2
+      ...(process.env.AWS_ENDPOINT ? { endpoint: process.env.AWS_ENDPOINT } : {}),
       // Credentials are picked up automatically from env vars
       // (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) or IAM role.
     });

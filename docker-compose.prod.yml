@@ -1,0 +1,62 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:?DOMAIN is required}
+    depends_on:
+      - frontend
+      - backend
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - NEXT_PUBLIC_API_URL=https://api.${DOMAIN:?DOMAIN is required}
+    restart: unless-stopped
+    # Port not exposed to host — Caddy handles all external traffic
+    expose:
+      - "3000"
+
+  backend:
+    restart: unless-stopped
+    expose:
+      - "4000"
+    environment:
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET:-}
+      - AWS_REGION=${AWS_REGION:-auto}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_S3_CUSTOM_DOMAIN=${AWS_S3_CUSTOM_DOMAIN:-}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
+
+  mongodb:
+    # Don't expose MongoDB port to the internet in production
+    ports: !reset []
+
+  mongo-backup:
+    image: mongo:8.0
+    restart: unless-stopped
+    volumes:
+      - ${BACKUP_DIR:?BACKUP_DIR is required}:/backups
+      - ./scripts/backup-mongo.sh:/backup.sh:ro
+    environment:
+      - MONGO_USER=${MONGO_INITDB_ROOT_USERNAME:?MONGO_INITDB_ROOT_USERNAME is required}
+      - MONGO_PASS=${MONGO_INITDB_ROOT_PASSWORD:?MONGO_INITDB_ROOT_PASSWORD is required}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c", "crond -f -d 8 & echo '0 2 * * * /backup.sh' | crontab - && wait"]
+
+volumes:
+  caddy_data:
+  caddy_config:

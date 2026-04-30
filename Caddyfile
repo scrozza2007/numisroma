@@ -1,0 +1,13 @@
+{$DOMAIN} {
+    # Frontend
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
+
+api.{$DOMAIN} {
+    # Backend API
+    handle {
+        reverse_proxy backend:4000
+    }
+}

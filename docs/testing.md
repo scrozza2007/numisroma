@@ -41,13 +41,53 @@ Current baseline: ~55% statements / ~53% branches / ~46% functions.
 
 ---
 
-## Frontend
+## Frontend E2E tests (Cypress)
+
+Cypress tests run against a live frontend + backend. Make sure both are running before starting tests.
 
 ```bash
-cd frontend
-npm run build     # Next.js build — also acts as lint (type errors fail the build)
-npx cypress open  # interactive E2E tests
+# Start the stack
+npm run dev
+
+# Interactive mode (opens Cypress UI)
+cd frontend && npm run cypress:open
+
+# Headless mode (for CI)
+cd frontend && npm run cypress:run
 ```
+
+Environment variables consumed by Cypress:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYPRESS_BASE_URL` | `http://localhost:3000` | Frontend URL |
+| `CYPRESS_API_URL` | `http://localhost:4000` | Backend API URL |
+
+### Test specs
+
+| File | Covers |
+|------|--------|
+| `auth.cy.js` | Register (success, duplicate email, mismatched passwords), Login (valid, invalid, empty) |
+| `browse.cy.js` | Browse page loads, coin list renders, search filter, navigate to coin detail |
+| `coin-detail.cy.js` | Coin detail page renders, obverse image present, emperor/denomination fields, back link |
+
+### Custom commands (`cypress/support/commands.js`)
+
+| Command | Description |
+|---------|-------------|
+| `cy.login(email, password)` | Logs in via the UI and caches the session with `cy.session` |
+| `cy.logout()` | Clicks the Sign out button from the home page |
+
+### Fixtures
+
+| File | Used for |
+|------|----------|
+| `fixtures/test-user.json` | Reference test user shape (username, email, password) |
+
+### Notes
+
+- `auth.cy.js` registers a unique timestamped user at the start of the run, then the Login describe block uses that same user. Both describe blocks run in the same Cypress process so the user is guaranteed to exist by the time login tests run.
+- Tests assume the database is seeded with coin data for `browse.cy.js` and `coin-detail.cy.js` to pass.
 
 ---
 

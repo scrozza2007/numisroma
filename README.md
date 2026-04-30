@@ -115,11 +115,14 @@ numisroma/
 ├── frontend/                 Next.js (Pages Router)
 │   ├── components/          Layout, Navbar, dropdowns, sliders, toasts
 │   ├── context/             AuthContext (global auth state)
+│   ├── cypress/             E2E tests (auth, browse, coin detail)
 │   ├── pages/               browse, collections, profile, messages, settings…
 │   └── utils/               apiClient, csrf, tokens, passwordValidation
 ├── docs/                    API reference, deployment guide, testing guide
 ├── scripts/                 MongoDB backup script
-├── docker-compose.yml
+├── docker-compose.yml        Base compose (dev + prod base)
+├── docker-compose.prod.yml   Production overlay (Caddy, mongo-backup)
+├── Caddyfile                 Reverse proxy + auto-TLS config
 └── .env.example
 ```
 
@@ -135,12 +138,14 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MONGODB_URI` | ✅ | MongoDB connection string |
-| `JWT_SECRET` | ✅ | ≥ 32-char random string |
-| `REFRESH_TOKEN_SECRET` | ✅ | ≥ 32-char, must differ from `JWT_SECRET` |
-| `CSRF_SECRET` | prod only | ≥ 32-char; falls back to `JWT_SECRET` in dev |
+| `JWT_SECRET` | ✅ | ≥ 64-char random string |
+| `REFRESH_TOKEN_SECRET` | ✅ | ≥ 64-char, must differ from `JWT_SECRET` |
+| `CSRF_SECRET` | prod only | ≥ 64-char; falls back to `JWT_SECRET` in dev |
 | `FRONTEND_URL` | prod only | Allowed CORS origin(s), comma-separated |
-| `REDIS_URL` | optional | Redis-backed caching and rate limiting |
-| `AWS_S3_BUCKET` | optional | S3 image storage; falls back to local disk |
+| `DOMAIN` | prod only | Public hostname (e.g. `numisroma.com`); used by Caddy and the prod compose |
+| `REDIS_URL` | optional | Redis-backed caching and rate limiting; falls back to in-memory |
+| `AWS_S3_BUCKET` | optional | S3 / Cloudflare R2 image storage; falls back to local disk |
+| `AWS_ENDPOINT` | optional | R2 only: `https://ACCOUNT_ID.r2.cloudflarestorage.com` |
 | `SENTRY_DSN` | optional | Error tracking via Sentry |
 | `ADMIN_API_KEY` | optional | ≥ 32-char key to access cache-flush admin endpoints |
 
@@ -200,7 +205,7 @@ See `backend/.env.example` and `.env.example` for the full list.
 | **Cache** | Redis (optional, in-memory fallback) |
 | **Auth** | JWT (httpOnly cookies), refresh token rotation |
 | **Image processing** | Multer + Sharp (WebP, max 1920×1080) |
-| **Image storage** | Local disk or AWS S3 |
+| **Image storage** | Local disk, AWS S3, or Cloudflare R2 |
 | **Observability** | Sentry (errors), Prometheus `/metrics` |
 | **Containerization** | Docker + Docker Compose |
 
@@ -245,6 +250,12 @@ cd backend && npm run test:coverage
 
 # Single file
 cd backend && npx jest tests/unit/coinController.test.js
+
+# Frontend E2E — interactive
+cd frontend && npm run cypress:open
+
+# Frontend E2E — headless
+cd frontend && npm run cypress:run
 ```
 
 | Test suite | Covers |

@@ -19,7 +19,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "cypress:open": "cypress open"
+    "cypress:open": "cypress open",
+    "cypress:run": "cypress run"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.16",
