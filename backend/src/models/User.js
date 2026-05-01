@@ -63,6 +63,20 @@ const UserSchema = new Schema({
   isPrivate: {
     type: Boolean,
     default: false
+  },
+  // X25519 public key for E2EE messaging (base64-encoded, 32 bytes).
+  // Write-once — never overwritten after first registration.
+  publicKey: {
+    type: String,
+    default: null
+  },
+  // The PBKDF2+AES-GCM encrypted private key blob, stored server-side so the
+  // user can restore their keypair on any new device using only their password.
+  // Format: JSON string { salt: b64, iv: b64, ct: b64 }
+  // The server never sees the plaintext private key — only this opaque blob.
+  encryptedPrivateKey: {
+    type: String,
+    default: null
   }
 }, { timestamps: true });
 

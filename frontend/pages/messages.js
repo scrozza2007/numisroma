@@ -3,9 +3,11 @@ import { AuthContext } from '../context/AuthContext';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import Image from 'next/image';
+import Link from 'next/link';
 import NotificationToast from '../components/NotificationToast';
 import Navbar from '../components/Navbar';
-import { apiClient } from '../utils/apiClient';
+import { apiClient, ApiError } from '../utils/apiClient';
+import { encryptMessage, decryptMessage } from '../utils/e2ee';
 
 const COMMON_EMOJIS = [
   '😊', '😂', '❤️', '👍', '🎉', '🙏', '👋', '🔥',
@@ -27,11 +29,18 @@ const Messages = () => {
   const [showUserSearch, setShowUserSearch] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [lastMessageId, setLastMessageId] = useState(null);
+  const [readConversationIds, setReadConversationIds] = useState(new Set());
+  // Backoff flag: timestamp (ms) until which polling should be suppressed after a 429.
+  const pollBackoffUntilRef = useRef(0);
   const pollingRef = useRef(null);
   const convPollingRef = useRef(null);
   const sseRef = useRef(null);
-  const { user, isLoading: authLoading } = useContext(AuthContext);
+  const sseBackoffRef = useRef(2000); // SSE reconnect backoff in ms, starts at 2 s
+  const sseTimerRef = useRef(null);
+  const { user, isLoading: authLoading, privateKeyRef, e2eeReady } = useContext(AuthContext);
   const router = useRouter();
+  // Cache recipient public keys: { [userId]: base64PublicKey }
+  const pubKeyCache = useRef({});
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const emojiPickerRef = useRef(null);
   const inputRef = useRef(null);
@@ -52,35 +61,100 @@ const Messages = () => {
 
   const fetchConversations = useCallback(async (silent = false) => {
     if (typeof window === 'undefined') return;
+    // Respect rate-limit backoff.
+    if (Date.now() < pollBackoffUntilRef.current) return;
     try {
       if (!silent) setLoading(true);
       const data = await apiClient.get('/api/messages/conversations');
       setConversations(Array.isArray(data) ? data : data.conversations || []);
-    } catch {
-      if (!silent) addNotification('Error loading conversations', 'error');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        // Back off for 60 s on rate-limit response.
+        pollBackoffUntilRef.current = Date.now() + 60000;
+        if (!silent) addNotification('Too many requests. Pausing for 60 seconds.', 'error');
+      } else if (!silent) {
+        addNotification('Error loading conversations', 'error');
+      }
     } finally {
       if (!silent) setLoading(false);
     }
   }, []);
 
+  // Fetch and cache a user's public key. Always keyed by string ID.
+  const getRecipientPublicKey = useCallback(async (userId) => {
+    const id = String(userId);
+    if (pubKeyCache.current[id]) return pubKeyCache.current[id];
+    try {
+      const data = await apiClient.get(`/api/users/${id}/public-key`);
+      if (data.publicKey) pubKeyCache.current[id] = data.publicKey;
+      return data.publicKey ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Decrypt a single message in-place. Never shows raw ciphertext or error strings.
+  const decryptOne = useCallback((msg) => {
+    if (!msg.isEncrypted || !msg.nonce) return msg;
+
+    // Check session cache first (covers own sent messages after reload).
+    try {
+      const cached = sessionStorage.getItem(`msg:${msg._id}`);
+      if (cached) return { ...msg, content: cached };
+    } catch {}
+
+    if (!privateKeyRef.current) return null;
+
+    const senderId = String(msg.sender._id);
+    const senderPublicKey = pubKeyCache.current[senderId] || msg.sender?.publicKey;
+    if (!senderPublicKey) return null;
+
+    const plaintext = decryptMessage(msg.content, msg.nonce, senderPublicKey, privateKeyRef.current);
+    if (plaintext !== null) {
+      try { sessionStorage.setItem(`msg:${msg._id}`, plaintext); } catch {}
+      return { ...msg, content: plaintext };
+    }
+
+    return null; // undecryptable — filter out entirely
+  }, [privateKeyRef]);
+
   const fetchMessages = useCallback(async (conversationId, silent = false) => {
     if (typeof window === 'undefined') return;
+    // Respect rate-limit backoff.
+    if (Date.now() < pollBackoffUntilRef.current) return;
     try {
       const data = await apiClient.get(`/api/messages/${conversationId}`);
-      if (silent && data.length > 0) {
-        const latestMessage = data[data.length - 1];
+
+      // Pre-cache public keys for all senders we haven't seen yet (string IDs).
+      const unknownSenderIds = [...new Set(
+        data
+          .filter(m => m.isEncrypted && !pubKeyCache.current[String(m.sender._id)])
+          .map(m => String(m.sender._id))
+      )];
+      await Promise.all(unknownSenderIds.map(id => getRecipientPublicKey(id)));
+
+      const decrypted = data.map(m => m.isEncrypted ? decryptOne(m) : m).filter(Boolean);
+
+      if (silent && decrypted.length > 0) {
+        const latestMessage = decrypted[decrypted.length - 1];
         if (lastMessageId && latestMessage._id !== lastMessageId && latestMessage.sender._id !== user._id) {
           addNotification(`New message from ${latestMessage.sender.username}`, 'message');
         }
         setLastMessageId(latestMessage._id);
       }
-      setMessages(data);
-      if (!silent && data.length > 0) setLastMessageId(data[data.length - 1]._id);
+      setMessages(decrypted);
+      if (!silent && decrypted.length > 0) setLastMessageId(decrypted[decrypted.length - 1]._id);
       if (!silent) markAsRead(conversationId);
-    } catch {
-      if (!silent) addNotification('Error loading messages', 'error');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        // Back off for 60 s on rate-limit response.
+        pollBackoffUntilRef.current = Date.now() + 60000;
+        if (!silent) addNotification('Too many requests. Pausing for 60 seconds.', 'error');
+      } else if (!silent) {
+        addNotification('Error loading messages', 'error');
+      }
     }
-  }, [lastMessageId, user]);
+  }, [lastMessageId, user, getRecipientPublicKey, decryptOne]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -88,13 +162,29 @@ const Messages = () => {
     }
   }, [user, authLoading, router]);
 
+  // Capture the target conversationId from the URL once on mount, then strip it
+  // immediately so router state changes don't interfere with the selection logic.
+  const pendingConvIdRef = useRef(
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('conversationId')
+      : null
+  );
+
+  // Once conversations are loaded, open the pending conversation (from notification click).
   useEffect(() => {
-    if (typeof window !== 'undefined' && user && router.query.conversationId) {
-      const conversationId = router.query.conversationId;
-      const conversation = conversations.find(c => c._id === conversationId);
-      if (conversation) { setSelectedConversation(conversation); fetchMessages(conversationId); }
+    if (!user || conversations.length === 0 || !pendingConvIdRef.current) return;
+    const conversationId = pendingConvIdRef.current;
+    pendingConvIdRef.current = null; // consume it — only handle once
+
+    const conversation = conversations.find(c => c._id === conversationId);
+    if (conversation) {
+      setSelectedConversation(conversation);
+      setLastMessageId(null);
+      fetchMessages(conversationId);
+      markAsRead(conversationId);
+      setMobileChatOpen(true);
     }
-  }, [user, router.query.conversationId, conversations, fetchMessages]);
+  }, [user, conversations, fetchMessages]);
 
   useEffect(() => {
     const handleRouteError = (err) => { if (err.message && err.message.includes('Invariant')) return; };
@@ -106,38 +196,72 @@ const Messages = () => {
     if (typeof window !== 'undefined' && user) fetchConversations();
   }, [user, fetchConversations]);
 
-  // SSE for real-time message notifications.
+  // SSE for real-time message notifications with exponential backoff reconnect.
   useEffect(() => {
     if (typeof window === 'undefined' || !user) return;
 
     let es;
+    let cancelled = false;
+
     const connect = () => {
+      if (cancelled) return;
       try {
-        es = new EventSource('/api/notifications/stream', { withCredentials: true });
+        es = new EventSource(`${process.env.NEXT_PUBLIC_API_URL}/api/notifications/stream`, { withCredentials: true });
         sseRef.current = es;
+
+        es.onopen = () => {
+          // Successful connection — reset backoff.
+          sseBackoffRef.current = 2000;
+        };
+
         es.onmessage = (e) => {
           try {
             const data = JSON.parse(e.data);
-            // If messages count changed, refresh the current conversation immediately.
             if (typeof data.messages === 'number') {
               const conv = selectedConvRef.current;
-              if (conv) fetchMessages(conv._id, true);
+              if (conv) {
+                // Auto-read if conversation is currently open.
+                fetchMessages(conv._id, true);
+                markAsRead(conv._id);
+              } else {
+                // New message in a background conversation — clear read cache so dot reappears.
+                setReadConversationIds(new Set());
+              }
               fetchConversations(true);
             }
           } catch {}
         };
-        es.onerror = () => { es.close(); };
+
+        es.onerror = () => {
+          es.close();
+          if (cancelled) return;
+          // Exponential backoff: double each attempt, cap at 30 s.
+          const delay = sseBackoffRef.current;
+          sseBackoffRef.current = Math.min(sseBackoffRef.current * 2, 30000);
+          sseTimerRef.current = setTimeout(() => {
+            if (!cancelled) connect();
+          }, delay);
+        };
       } catch {}
     };
 
     connect();
-    return () => { if (es) es.close(); };
+
+    return () => {
+      cancelled = true;
+      if (sseTimerRef.current) clearTimeout(sseTimerRef.current);
+      if (es) es.close();
+    };
   }, [user, fetchMessages, fetchConversations]);
 
   // Fallback polling for messages (20s, SSE handles fast path).
   useEffect(() => {
     if (typeof window === 'undefined' || !user || !selectedConversation) return;
-    const tick = () => { if (!document.hidden) fetchMessages(selectedConversation._id, true); };
+    const tick = () => {
+      if (!document.hidden && Date.now() >= pollBackoffUntilRef.current) {
+        fetchMessages(selectedConversation._id, true);
+      }
+    };
     pollingRef.current = setInterval(tick, 20000);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, [user, selectedConversation, fetchMessages]);
@@ -145,7 +269,11 @@ const Messages = () => {
   // Fallback polling for conversations list (30s).
   useEffect(() => {
     if (typeof window === 'undefined' || !user) return;
-    const tick = () => { if (!document.hidden) fetchConversations(true); };
+    const tick = () => {
+      if (!document.hidden && Date.now() >= pollBackoffUntilRef.current) {
+        fetchConversations(true);
+      }
+    };
     convPollingRef.current = setInterval(tick, 30000);
     return () => clearInterval(convPollingRef.current);
   }, [user, fetchConversations]);
@@ -156,14 +284,34 @@ const Messages = () => {
   }, [messages]);
 
   const markAsRead = async (conversationId) => {
+    setReadConversationIds(prev => new Set([...prev, conversationId]));
     try { await apiClient.put(`/api/messages/${conversationId}/read`); } catch {}
   };
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedConversation) return;
+    const plaintext = newMessage.trim();
     try {
-      const message = await apiClient.post(`/api/messages/${selectedConversation._id}`, { content: newMessage.trim(), messageType: 'text' });
-      setMessages(prev => [...prev, message]);
+      if (!e2eeReady || !privateKeyRef.current) {
+        addNotification('Encryption not ready. Please wait a moment and try again.', 'error');
+        return;
+      }
+
+      const otherUser = getOtherUser(selectedConversation);
+      const recipientPubKey = await getRecipientPublicKey(otherUser._id);
+      if (!recipientPubKey) {
+        addNotification('Recipient has not set up encryption yet. Ask them to log in again.', 'error');
+        return;
+      }
+
+      const { ciphertext, nonce } = encryptMessage(plaintext, recipientPubKey, privateKeyRef.current);
+      const payload = { content: ciphertext, messageType: 'text', nonce, isEncrypted: true };
+
+      const message = await apiClient.post(`/api/messages/${selectedConversation._id}`, payload);
+      // Cache plaintext in sessionStorage so sent messages survive page reloads.
+      try { sessionStorage.setItem(`msg:${message._id}`, plaintext); } catch {}
+      // Show plaintext locally — we know what we sent.
+      setMessages(prev => [...prev, { ...message, content: plaintext }]);
       setNewMessage('');
       setLastMessageId(message._id);
       fetchConversations(true);
@@ -189,11 +337,20 @@ const Messages = () => {
       setLastMessageId(null);
       fetchMessages(conversation._id);
       fetchConversations();
+      // Pre-warm the recipient's public key so first send is instant.
+      getRecipientPublicKey(otherUserId);
       setShowUserSearch(false);
       setSearchUsers('');
       setFoundUsers([]);
-    } catch {
-      addNotification('Error creating conversation', 'error');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        addNotification(
+          'This account is private. You need to follow them first to send messages.',
+          'error'
+        );
+      } else {
+        addNotification('Error creating conversation', 'error');
+      }
     }
   };
 
@@ -232,6 +389,17 @@ const Messages = () => {
       }
     }
     return null;
+  };
+
+  // Determine whether a conversation has an unread last message.
+  const isConversationUnread = (conversation) => {
+    if (!conversation.lastMessage) return false;
+    // Already open or already locally marked as read.
+    if (selectedConversation?._id === conversation._id) return false;
+    if (readConversationIds.has(conversation._id)) return false;
+    const senderId = conversation.lastMessage.sender?._id ?? conversation.lastMessage.sender;
+    // Only show dot for messages sent by the other person.
+    return String(senderId) !== String(user._id);
   };
 
   if (authLoading) {
@@ -330,6 +498,7 @@ const Messages = () => {
                 conversations.map(conversation => {
                   const otherUser = getOtherUser(conversation);
                   const isSelected = selectedConversation?._id === conversation._id;
+                  const hasUnread = isConversationUnread(conversation);
                   return (
                     <div
                       key={conversation._id}
@@ -339,6 +508,9 @@ const Messages = () => {
                         fetchMessages(conversation._id);
                         markAsRead(conversation._id);
                         setMobileChatOpen(true);
+                        // Pre-warm recipient public key for fast first encrypt.
+                        const other = getOtherUser(conversation);
+                        if (other) getRecipientPublicKey(other._id);
                       }}
                       className={`flex items-center gap-3 p-3.5 cursor-pointer transition-colors duration-100 border-b border-border ${isSelected ? 'bg-amber-bg border-l-[3px] border-l-amber' : 'hover:bg-surface-alt border-l-[3px] border-l-transparent'}`}
                     >
@@ -353,17 +525,22 @@ const Messages = () => {
                         <p className="font-sans text-sm font-medium truncate text-text-primary">
                           {otherUser?.fullName || otherUser?.username}
                         </p>
-                        {conversation.lastMessage && (
+                        {conversation.lastMessage && !conversation.lastMessage.isEncrypted && (
                           <p className="font-sans text-xs truncate text-text-muted">
                             {conversation.lastMessage.isDeleted ? 'Message deleted' : conversation.lastMessage.content}
                           </p>
                         )}
                       </div>
-                      {conversation.lastActivity && (
-                        <span className="font-sans text-xs shrink-0 text-text-muted">
-                          {formatTime(conversation.lastActivity)}
-                        </span>
-                      )}
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        {conversation.lastActivity && (
+                          <span className="font-sans text-xs text-text-muted">
+                            {formatTime(conversation.lastActivity)}
+                          </span>
+                        )}
+                        {hasUnread && (
+                          <span className="w-2 h-2 rounded-full bg-amber inline-block" aria-label="Unread message" />
+                        )}
+                      </div>
                     </div>
                   );
                 })
@@ -386,7 +563,10 @@ const Messages = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
                     </svg>
                   </button>
-                  <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-amber-bg overflow-hidden">
+                  <Link
+                    href={`/profile?id=${getOtherUser(selectedConversation)?._id}`}
+                    className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 bg-amber-bg overflow-hidden hover:opacity-80 transition-opacity duration-150"
+                  >
                     {getOtherUser(selectedConversation)?.avatar ? (
                       <Image
                         src={getOtherUser(selectedConversation).avatar}
@@ -398,11 +578,23 @@ const Messages = () => {
                         {getOtherUser(selectedConversation)?.username?.charAt(0).toUpperCase()}
                       </span>
                     )}
-                  </div>
+                  </Link>
                   <div>
-                    <p className="font-sans text-sm font-semibold text-text-primary">
-                      {getOtherUser(selectedConversation)?.fullName || getOtherUser(selectedConversation)?.username}
-                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <Link
+                        href={`/profile?id=${getOtherUser(selectedConversation)?._id}`}
+                        className="font-sans text-sm font-semibold text-text-primary hover:text-amber transition-colors duration-150"
+                      >
+                        {getOtherUser(selectedConversation)?.fullName || getOtherUser(selectedConversation)?.username}
+                      </Link>
+                      {e2eeReady && (
+                        <span title="End-to-end encrypted">
+                          <svg className="w-3.5 h-3.5 text-amber" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                          </svg>
+                        </span>
+                      )}
+                    </div>
                     <p className="font-sans text-xs text-text-muted">
                       @{getOtherUser(selectedConversation)?.username}
                     </p>

@@ -13,9 +13,17 @@ const MessageSchema = new Schema({
   },
   content: {
     type: String,
-    required: true,
     trim: true,
-    maxlength: [5000, 'Message content cannot exceed 5000 characters']
+    maxlength: [8000, 'Message content cannot exceed 8000 characters']
+  },
+  // Present when isEncrypted is true — base64-encoded 24-byte NaCl nonce.
+  nonce: {
+    type: String,
+    default: null
+  },
+  isEncrypted: {
+    type: Boolean,
+    default: false
   },
   messageType: {
     type: String,

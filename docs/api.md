@@ -548,7 +548,7 @@ On the frontend, the Navbar holds the single SSE connection and re-broadcasts ea
 GET /api/notifications?page=1&limit=20
 ```
 
-Returns `{ notifications: [...], pagination }`. Each notification includes a populated `sender` (username, avatar).
+Returns `{ notifications: [...], pagination }`. Each notification includes a populated `sender` (username, avatar) and, for `new_message` notifications, a populated `relatedConversation` (`{ _id }`).
 
 Notification `type` values: `follow_request` | `follow_accepted` | `new_follower` | `new_message`.
 
@@ -618,8 +618,15 @@ GET /api/messages/:conversationId
 POST /api/messages/:conversationId
 Content-Type: application/json
 
-{ "content": "string (≤5000 chars)", "messageType": "text" }
+{
+  "content": "string (≤8000 chars — base64 ciphertext when encrypted)",
+  "messageType": "text",
+  "nonce": "base64 string (required when isEncrypted is true)",
+  "isEncrypted": true
+}
 ```
+
+All messages are end-to-end encrypted on the frontend before sending. The server stores only ciphertext. `nonce` is the 24-byte XSalsa20 nonce encoded as base64. If `isEncrypted` is `true` and `nonce` is absent, the request returns `400`.
 
 ### Mark conversation as read
 
@@ -636,6 +643,46 @@ GET /api/messages/unread-count
 ```
 
 Returns `{ unreadCount: <number> }` — total unread messages across all conversations.
+
+---
+
+## E2EE key registry — `/api/users`
+
+End-to-end encryption uses X25519 key agreement + XSalsa20-Poly1305 (TweetNaCl `box`).
+The private key never leaves the client in plaintext — it is encrypted with PBKDF2-SHA256
+(200 000 iterations) + AES-GCM-256 before being stored or transmitted.
+
+### Register or update keypair (write-once for public key)
+
+```http
+PUT /api/users/me/e2ee-keys
+Content-Type: application/json
+
+{
+  "publicKey": "base64 X25519 public key (32 bytes)",
+  "encryptedPrivateKey": "JSON string { salt, iv, ct } — AES-GCM encrypted private key blob"
+}
+```
+
+`publicKey` is **write-once**: if the user already has a public key registered, the field is not updated. This prevents silent key rotation that would make previously encrypted messages unreadable.
+
+`encryptedPrivateKey` is always updated (e.g. when the user changes their password, the blob is re-encrypted and re-uploaded).
+
+### Fetch own encrypted keypair (new-device restore)
+
+```http
+GET /api/users/me/e2ee-keys
+```
+
+Returns `{ publicKey, encryptedPrivateKey }`. The client decrypts the blob locally using the user's password to restore the private key on a new device — the server never sees the plaintext private key.
+
+### Fetch another user's public key
+
+```http
+GET /api/users/:id/public-key
+```
+
+Returns `{ publicKey: "base64" | null }`. Used by the sender to encrypt a message for the recipient before sending.
 
 ---
 

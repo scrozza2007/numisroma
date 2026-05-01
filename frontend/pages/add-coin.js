@@ -325,7 +325,7 @@ const AddCoinToCollectionPage = () => {
                       >
                         <div className="w-14 h-14 overflow-hidden shrink-0 rounded bg-canvas">
                           <Image
-                            src={safeCoin.obverse?.image || '/images/coin-placeholder.jpg'}
+                            src={safeCoin.obverse?.image || '/images/coin-placeholder.svg'}
                             alt={safeCoin.name} width={56} height={56}
                             className="w-full h-full object-cover"
                           />
@@ -378,7 +378,7 @@ const AddCoinToCollectionPage = () => {
                 <div className="flex items-center gap-3 p-3 mb-5 rounded bg-surface-alt border border-border">
                   <div className="w-16 h-16 overflow-hidden shrink-0 rounded bg-canvas">
                     <Image
-                      src={selectedCoin.obverse?.image || '/images/coin-placeholder.jpg'}
+                      src={selectedCoin.obverse?.image || '/images/coin-placeholder.svg'}
                       alt={selectedCoin.name} width={64} height={64}
                       className="w-full h-full object-cover"
                     />

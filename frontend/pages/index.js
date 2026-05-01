@@ -110,7 +110,7 @@ const Home = () => {
                         className="group relative aspect-square rounded-md overflow-hidden bg-surface border border-border"
                       >
                         <Image
-                          src={coin.obverse?.image || '/images/coin-placeholder.jpg'}
+                          src={coin.obverse?.image || '/images/coin-placeholder.svg'}
                           alt={coin.name}
                           fill
                           className="object-contain p-5 mix-blend-multiply group-hover:scale-105 transition-transform duration-300"
@@ -165,7 +165,7 @@ const Home = () => {
                   >
                     <div className="aspect-square relative bg-surface">
                       <Image
-                        src={coin.obverse?.image || '/images/coin-placeholder.jpg'}
+                        src={coin.obverse?.image || '/images/coin-placeholder.svg'}
                         alt={coin.name}
                         fill
                         className="object-contain p-5 mix-blend-multiply"

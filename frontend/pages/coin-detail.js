@@ -206,7 +206,7 @@ const CoinDetail = () => {
                           onClick={() => { setActiveImage(side); setIsZoomed(true); }}
                         >
                           <Image
-                            src={coin[side]?.image ? (coin[side].image.startsWith('http') ? coin[side].image : `${process.env.NEXT_PUBLIC_API_URL}${coin[side].image}`) : '/images/coin-placeholder.jpg'}
+                            src={coin[side]?.image ? (coin[side].image.startsWith('http') ? coin[side].image : `${process.env.NEXT_PUBLIC_API_URL}${coin[side].image}`) : '/images/coin-placeholder.svg'}
                             alt={`${side === 'obverse' ? 'Obverse' : 'Reverse'} — ${coin.name}`}
                             width={400} height={400}
                             className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105"
@@ -396,7 +396,7 @@ const CoinDetail = () => {
                   </button>
                   <div className="p-6">
                     <Image
-                      src={coin[activeImage]?.image ? (coin[activeImage].image.startsWith('http') ? coin[activeImage].image : `${process.env.NEXT_PUBLIC_API_URL}${coin[activeImage].image}`) : '/images/coin-placeholder.jpg'}
+                      src={coin[activeImage]?.image ? (coin[activeImage].image.startsWith('http') ? coin[activeImage].image : `${process.env.NEXT_PUBLIC_API_URL}${coin[activeImage].image}`) : '/images/coin-placeholder.svg'}
                       alt={`${activeImage} — ${coin.name}`}
                       width={800} height={800}
                       className="w-full h-auto object-contain"

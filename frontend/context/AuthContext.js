@@ -1,6 +1,17 @@
-import { createContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useState, useEffect, useCallback, useRef } from 'react';
+import nacl from 'tweetnacl';
 import { useRouter } from 'next/router';
-import { getCsrfHeader, invalidateCsrfToken } from '../utils/csrf';
+import { getCsrfHeader, invalidateCsrfToken, ensureCsrfToken } from '../utils/csrf';
+import {
+  generateAndLockKeypair,
+  unlockKeypair,
+  relockKeypair,
+  clearStoredKeypair,
+  hasStoredKeypair,
+  cachePrivateKeyInSession,
+  loadPrivateKeyFromSession,
+  clearSessionPrivateKey,
+} from '../utils/e2ee';
 
 export const AuthContext = createContext();
 
@@ -39,6 +50,11 @@ export const AuthProvider = ({ children }) => {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionTerminated, setSessionTerminated] = useState(false);
   const [terminationReason, setTerminationReason] = useState(null);
+
+  // E2EE keypair — private key lives only in memory (never persisted as plaintext).
+  // The encrypted blob is stored in localStorage; it's unlocked with the user's password.
+  const privateKeyRef = useRef(null); // Uint8Array | null
+  const [e2eeReady, setE2eeReady] = useState(false);
 
   // Placeholder hook for instrumenting auth state transitions. No-op in
   // production; kept for future diagnostic wiring.
@@ -129,6 +145,8 @@ export const AuthProvider = ({ children }) => {
           setUser(sanitizedUser);
           setToken(userData.token || true); // truthy sentinel; real token stays in-memory only
           localStorage.setItem('user', JSON.stringify(sanitizedUser));
+          // Restore E2EE from sessionStorage on reload (no password needed).
+          if (!privateKeyRef.current) initE2EE(null).catch(() => {});
           logState('After setting user data');
         } else {
           console.warn('Invalid user data from API');
@@ -184,7 +202,82 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener('storage', handleStorage);
   }, [user]);
 
-  const login = async (newToken, userData) => {
+  // Unlock or generate the E2EE keypair and register the public key with the server.
+  // Called after every successful login with the plaintext password.
+  const initE2EE = useCallback(async (password) => {
+    try {
+      let keys = null;
+
+      // 1. Try sessionStorage first — survives page reloads within the same browser session.
+      const sessionKey = loadPrivateKeyFromSession();
+      if (sessionKey) {
+        const { publicKey } = nacl.box.keyPair.fromSecretKey(sessionKey);
+        keys = { privateKeyBytes: sessionKey, publicKeyBytes: publicKey };
+      }
+
+      if (!keys && password) {
+        // 2. Try localStorage — keypair was generated on this device before.
+        if (hasStoredKeypair()) {
+          keys = await unlockKeypair(password);
+          if (!keys) return; // wrong password — abort, never regenerate
+        } else {
+          // 3. New device — fetch the encrypted blob from the server and decrypt locally.
+          //    This is the WhatsApp-style cloud backup: the server stores the blob,
+          //    only the user's password can decrypt it.
+          invalidateCsrfToken();
+          await ensureCsrfToken();
+          const res = await authFetch(`${process.env.NEXT_PUBLIC_API_URL}/api/users/me/e2ee-keys`);
+          if (res.ok) {
+            const { encryptedPrivateKey } = await res.json();
+            if (encryptedPrivateKey) {
+              // Restore from server backup — decrypt using the password.
+              const { restoreKeypairFromBlob } = await import('../utils/e2ee');
+              keys = await restoreKeypairFromBlob(encryptedPrivateKey, password);
+              if (keys) {
+                // Save to localStorage so next login on this device is instant.
+                const { saveKeypairBlob } = await import('../utils/e2ee');
+                saveKeypairBlob(encryptedPrivateKey);
+              }
+            }
+          }
+
+          if (!keys) {
+            // 4. No server backup — first ever login. Generate a brand new keypair.
+            const result = await generateAndLockKeypair(password);
+            keys = { privateKeyBytes: result.privateKeyBytes, publicKeyBytes: result.publicKeyBytes };
+          }
+        }
+
+        if (!keys) return;
+        cachePrivateKeyInSession(keys.privateKeyBytes);
+
+        // Upload public key (write-once) + encrypted blob (always updated) to server.
+        invalidateCsrfToken();
+        await ensureCsrfToken();
+        const { encodeBase64 } = await import('../utils/e2ee');
+        const encryptedBlob = localStorage.getItem('numisroma:encryptedPrivateKey');
+        await authFetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/users/me/e2ee-keys`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              publicKey: encodeBase64(keys.publicKeyBytes),
+              encryptedPrivateKey: encryptedBlob
+            })
+          }
+        );
+      }
+
+      if (!keys) return;
+      privateKeyRef.current = keys.privateKeyBytes;
+      setE2eeReady(true);
+    } catch (err) {
+      console.warn('E2EE init failed — messages will not be encrypted', err);
+    }
+  }, []);
+
+  const login = async (newToken, userData, password) => {
     if (!newToken) return;
 
     setToken(newToken); // memory only — never persisted to localStorage
@@ -205,6 +298,9 @@ export const AuthProvider = ({ children }) => {
     } else {
       await fetchUserData();
     }
+
+    // Initialise E2EE keypair in the background — non-blocking.
+    if (password) initE2EE(password).catch(() => {});
   };
 
   // Function to check if a response indicates session was terminated
@@ -260,6 +356,10 @@ export const AuthProvider = ({ children }) => {
     } finally {
       localStorage.removeItem('user');
       invalidateCsrfToken();
+      // Wipe private key from memory and session on logout.
+      privateKeyRef.current = null;
+      setE2eeReady(false);
+      clearSessionPrivateKey();
 
       if (logoutReason) {
         // Hard redirect so the entire app re-initialises cleanly — no stale
@@ -415,6 +515,31 @@ export const AuthProvider = ({ children }) => {
           error: data.error,
           details: data.details
         };
+      }
+
+      // Re-encrypt the stored private key under the new password and re-upload the blob
+      // so any new device restore also uses the new password.
+      if (hasStoredKeypair()) {
+        try {
+          await relockKeypair(currentPassword, newPassword);
+          const { encodeBase64 } = await import('../utils/e2ee');
+          const encryptedBlob = localStorage.getItem('numisroma:encryptedPrivateKey');
+          const publicKeyB64 = privateKeyRef.current
+            ? encodeBase64(nacl.box.keyPair.fromSecretKey(privateKeyRef.current).publicKey)
+            : null;
+          if (encryptedBlob && publicKeyB64) {
+            await authFetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/api/users/me/e2ee-keys`,
+              {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ publicKey: publicKeyB64, encryptedPrivateKey: encryptedBlob })
+              }
+            );
+          }
+        } catch {
+          // Non-fatal — user can still change password; E2EE restore on new device may fail.
+        }
       }
 
       return {
@@ -615,7 +740,11 @@ export const AuthProvider = ({ children }) => {
       checkSession,
       sessionTerminated,
       terminationReason,
-      resetSessionTermination
+      resetSessionTermination,
+      // E2EE
+      privateKeyRef,   // React ref — access .current for the Uint8Array private key
+      e2eeReady,       // true once the keypair is unlocked and public key registered
+      initE2EE,        // call with plaintext password to unlock/generate keypair
     }}>
       {children}
     </AuthContext.Provider>

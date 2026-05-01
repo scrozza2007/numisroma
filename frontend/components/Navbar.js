@@ -94,7 +94,7 @@ const Navbar = () => {
 
     const connect = () => {
       try {
-        es = new EventSource('/api/notifications/stream', { withCredentials: true });
+        es = new EventSource(`${process.env.NEXT_PUBLIC_API_URL}/api/notifications/stream`, { withCredentials: true });
         sseRef.current = es;
 
         es.onopen = () => {
@@ -207,7 +207,8 @@ const Navbar = () => {
     await markNotifRead(n);
     setIsBellOpen(false);
     if (n.type === 'new_message') {
-      router.push('/messages');
+      const convId = n.relatedConversation?._id || n.relatedConversation;
+      router.push(convId ? `/messages?conversationId=${convId}` : '/messages');
     } else if (n.sender?._id) {
       router.push(`/profile?id=${n.sender._id}`);
     }

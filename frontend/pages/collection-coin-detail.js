@@ -649,7 +649,7 @@ const CollectionCoinDetail = () => {
               </svg>
             </button>
             <Image
-              src={activeImage === 'obverse' ? (customImages.obverse || '/images/coin-placeholder.jpg') : (customImages.reverse || '/images/coin-placeholder.jpg')}
+              src={activeImage === 'obverse' ? (customImages.obverse || '/images/coin-placeholder.svg') : (customImages.reverse || '/images/coin-placeholder.svg')}
               alt={`${activeImage} - ${coin.name}`}
               width={800} height={800}
               className="w-full h-auto object-contain"

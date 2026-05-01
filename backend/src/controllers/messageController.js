@@ -31,7 +31,7 @@ const getConversations = async (req, res) => {
         .populate('participants', 'username fullName avatar')
         .populate({
           path: 'lastMessage',
-          select: 'content messageType sender createdAt isDeleted'
+          select: 'content messageType sender createdAt isDeleted isEncrypted'
         })
         .sort({ lastActivity: -1 })
         .skip(skip)
@@ -153,13 +153,15 @@ const getMessages = async (req, res) => {
 //      simultaneous sends don't clobber each other's `lastMessage`.
 //   4. Also enforce simple server-side length/type limits so schema errors
 //      can't leak as 500s.
-const SEND_MESSAGE_MAX_LENGTH = 5000;
+// Ciphertext is base64 and ~1.37× the plaintext size + 40-byte overhead.
+// 5000 chars * 1.37 + 40 ≈ 6890; round up to 8000 to be safe.
+const SEND_MESSAGE_MAX_LENGTH = 8000;
 
 const sendMessage = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { conversationId } = req.params;
-    const { content, messageType = 'text', imageUrl } = req.body;
+    const { content, messageType = 'text', imageUrl, nonce, isEncrypted = false } = req.body;
 
     if (messageType !== 'text' && messageType !== 'image') {
       return res.status(400).json({ message: 'Invalid messageType' });
@@ -172,6 +174,11 @@ const sendMessage = async (req, res) => {
         return res.status(400).json({
           message: `Message cannot exceed ${SEND_MESSAGE_MAX_LENGTH} characters`
         });
+      }
+    }
+    if (isEncrypted) {
+      if (typeof nonce !== 'string' || nonce.length === 0) {
+        return res.status(400).json({ message: 'nonce is required for encrypted messages' });
       }
     }
     if (messageType === 'image' && (typeof imageUrl !== 'string' || imageUrl.length === 0)) {
@@ -191,7 +198,9 @@ const sendMessage = async (req, res) => {
       sender: userId,
       content,
       messageType,
-      imageUrl: messageType === 'image' ? imageUrl : undefined
+      imageUrl: messageType === 'image' ? imageUrl : undefined,
+      nonce:       isEncrypted ? nonce : undefined,
+      isEncrypted: !!isEncrypted
     });
     await message.populate('sender', 'username fullName avatar');
 

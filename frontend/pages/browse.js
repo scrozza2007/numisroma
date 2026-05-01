@@ -324,7 +324,7 @@ const Browse = () => {
                     >
                       <div className="aspect-square relative bg-surface">
                         <Image
-                          src={coin.obverse?.image || '/images/coin-placeholder.jpg'}
+                          src={coin.obverse?.image || '/images/coin-placeholder.svg'}
                           alt={coin.name}
                           fill
                           className="object-contain p-4 mix-blend-multiply"

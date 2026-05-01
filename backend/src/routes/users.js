@@ -549,4 +549,55 @@ router.put('/me/privacy', authMiddleware, async (req, res) => {
   }
 });
 
+// PUT /api/users/me/e2ee-keys — register keypair on first login (write-once for publicKey).
+// Stores the encrypted private key blob so the user can restore on any new device.
+// The server never sees the plaintext private key — only the PBKDF2+AES-GCM blob.
+router.put('/me/e2ee-keys', authMiddleware, async (req, res) => {
+  try {
+    const { publicKey, encryptedPrivateKey } = req.body;
+    if (typeof publicKey !== 'string' || publicKey.length < 10 || publicKey.length > 100)
+      return res.status(400).json({ message: 'Invalid publicKey' });
+    if (typeof encryptedPrivateKey !== 'string' || encryptedPrivateKey.length < 10 || encryptedPrivateKey.length > 2000)
+      return res.status(400).json({ message: 'Invalid encryptedPrivateKey' });
+
+    // publicKey is write-once — only set if null. encryptedPrivateKey is always updated
+    // (user may change password which re-encrypts the blob).
+    const user = await User.findById(req.user.userId).select('publicKey').lean();
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const update = { encryptedPrivateKey };
+    if (!user.publicKey) update.publicKey = publicKey;
+
+    await User.updateOne({ _id: req.user.userId }, { $set: update });
+    res.json({ ok: true });
+  } catch (error) {
+    logger.error('Error updating E2EE keys', { error: error.message });
+    res.status(500).json({ message: 'Error updating E2EE keys' });
+  }
+});
+
+// GET /api/users/me/e2ee-keys — fetch own encrypted private key blob for new-device restore.
+router.get('/me/e2ee-keys', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select('publicKey encryptedPrivateKey').lean();
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ publicKey: user.publicKey ?? null, encryptedPrivateKey: user.encryptedPrivateKey ?? null });
+  } catch (error) {
+    logger.error('Error fetching E2EE keys', { error: error.message });
+    res.status(500).json({ message: 'Error fetching E2EE keys' });
+  }
+});
+
+// GET /api/users/:id/public-key — fetch another user's public key for encryption
+router.get('/:id/public-key', validateObjectId('id'), authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('publicKey').lean();
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ publicKey: user.publicKey ?? null });
+  } catch (error) {
+    logger.error('Error fetching public key', { error: error.message });
+    res.status(500).json({ message: 'Error fetching public key' });
+  }
+});
+
 module.exports = router;

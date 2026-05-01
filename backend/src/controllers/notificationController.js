@@ -57,6 +57,7 @@ const getNotifications = async (req, res) => {
     const [notifications, total] = await Promise.all([
       Notification.find({ recipient: userId })
         .populate('sender', 'username avatar')
+        .populate('relatedConversation', '_id')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
